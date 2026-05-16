@@ -105,3 +105,28 @@ configs:
     operation: read
     mode: async
     repetitions: 5
+
+  # === RQ4 (new in Phase D) ===
+  # Idle baseline: single switch, no background load. Characterises
+  # BMv2 steady-state cost just for being alive (event loop, gRPC
+  # idle, JSON-loaded pipeline) before any traffic hits it.
+  - rq: 4
+    workload_type: resource_only
+    p4_program: l3_lpm
+    topology: single_switch
+    n_switches: 1
+    background_load_mbps: 0
+    duration_s: 60
+    repetitions: 1
+
+  # Loaded multi-switch: linear-N=4 carrying MID-rate background
+  # traffic end-to-end. Surfaces how BMv2 CPU/RSS/throughput scale
+  # with chain length under a known-sustainable load.
+  - rq: 4
+    workload_type: resource_only
+    p4_program: l3_lpm
+    topology: linear_n
+    n_switches: 4
+    background_load_mbps: 25
+    duration_s: 60
+    repetitions: 1

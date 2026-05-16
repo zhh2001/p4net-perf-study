@@ -62,7 +62,10 @@ from workloads.control_plane_ops import (
     run_read_sync,
 )
 from workloads.latency_probe import run_probe
+from workloads.resource_monitor import ResourceMonitor
 from workloads.saturation_sweep import find_sustainable_load
+
+RESOURCE_SAMPLE_INTERVAL_S = 0.1
 
 logger = logging.getLogger("runner")
 
@@ -79,11 +82,13 @@ WORKLOAD_LATENCY_L2 = "latency_l2"
 WORKLOAD_LATENCY_L3 = "latency_l3"
 WORKLOAD_CONTROL_PLANE = "control_plane"
 WORKLOAD_SATURATION_SWEEP = "saturation_sweep"
+WORKLOAD_RESOURCE_ONLY = "resource_only"
 KNOWN_WORKLOAD_TYPES = {
     WORKLOAD_LATENCY_L2,
     WORKLOAD_LATENCY_L3,
     WORKLOAD_CONTROL_PLANE,
     WORKLOAD_SATURATION_SWEEP,
+    WORKLOAD_RESOURCE_ONLY,
 }
 
 
@@ -104,6 +109,29 @@ def _p4_path(program_name: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(path)
     return path
+
+
+def _collect_bmv2_pids(net: Any) -> list[int]:
+    """All live BMv2 PIDs in the network (one per switch)."""
+    pids: list[int] = []
+    for name in net.switches:
+        sw = net.switch(name)
+        bmv2 = getattr(sw, "bmv2", None)
+        pid = getattr(bmv2, "pid", None) if bmv2 is not None else None
+        if pid is not None:
+            pids.append(int(pid))
+    return pids
+
+
+def _collect_switch_ifaces(topo: Any) -> list[str]:
+    """Switch-side veth names from the topology (visible in root netns)."""
+    switch_nodes = set(topo.switches.keys())
+    ifaces: list[str] = []
+    for link in topo.links:
+        for endpoint in (link.a, link.b):
+            if endpoint.node in switch_nodes:
+                ifaces.append(endpoint.iface_name)
+    return ifaces
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,22 +208,38 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 try:
                     if wl in (WORKLOAD_LATENCY_L2, WORKLOAD_LATENCY_L3):
-                        samples = _run_latency(cfg, rep, warmup_s)
+                        samples, resource_samples = _run_latency(cfg, rep, warmup_s)
                         _write_latency_samples(jsonl_fh, samples, run_id, cfg, rep)
-                        logger.info("  → %d samples written", len(samples))
-                    elif wl == WORKLOAD_CONTROL_PLANE:
-                        result = _run_control_plane(cfg, rep)
-                        _write_control_plane_result(jsonl_fh, result, run_id, cfg, rep)
+                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info(
-                            "  → wall_clock=%.3fs success=%d failure=%d",
+                            "  → %d samples written, %d resource records",
+                            len(samples),
+                            len(resource_samples) * 4,
+                        )
+                    elif wl == WORKLOAD_CONTROL_PLANE:
+                        result, resource_samples = _run_control_plane(cfg, rep)
+                        _write_control_plane_result(jsonl_fh, result, run_id, cfg, rep)
+                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                        logger.info(
+                            "  → wall_clock=%.3fs success=%d failure=%d, %d resource records",
                             result["total_wall_clock_s"],
                             result["success_count"],
                             result["failure_count"],
+                            len(resource_samples) * 4,
                         )
-                    else:  # WORKLOAD_SATURATION_SWEEP
-                        sweep_results = _run_saturation_sweep(cfg)
+                    elif wl == WORKLOAD_SATURATION_SWEEP:
+                        sweep_results, resource_samples = _run_saturation_sweep(cfg)
                         _write_saturation_sweep(jsonl_fh, sweep_results, run_id, cfg, rep)
-                        logger.info("  → %d sweep records written", len(sweep_results))
+                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                        logger.info(
+                            "  → %d sweep records, %d resource records",
+                            len(sweep_results),
+                            len(resource_samples) * 4,
+                        )
+                    else:  # WORKLOAD_RESOURCE_ONLY
+                        _, resource_samples = _run_resource_only(cfg)
+                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                        logger.info("  → %d resource records", len(resource_samples) * 4)
                 except Exception as exc:
                     logger.exception("Config failed: %s", exc)
                     _write_failure(jsonl_fh, exc, run_id, cfg, rep)
@@ -217,7 +261,7 @@ def _run_latency(
     cfg: dict[str, Any],
     repetition: int,
     warmup_s: float,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from p4net import Network
 
     p4_path = _p4_path(str(cfg["p4_program"]))
@@ -250,7 +294,6 @@ def _run_latency(
                     {"nhop_mac": mac, "port": port},
                 )
         else:
-            # L2 forwarding: exact match on destination MAC.
             for mac, port in ((h2_mac, 2), (h1_mac, 1)):
                 sw.client.insert_table_entry(
                     "MyIngress.mac_forward",
@@ -259,8 +302,6 @@ def _run_latency(
                     {"port": port},
                 )
 
-        # Static ARP so iperf3 / control-plane peer reachability does
-        # not depend on kernel ARP resolution timing.
         for host_name, peer_ip, peer_mac in (
             ("h1", h2_ip, h2_mac),
             ("h2", h1_ip, h1_mac),
@@ -279,10 +320,10 @@ def _run_latency(
                     "permanent",
                 ]
             )
-        # Disable veth L4 offload so iperf3 background traffic actually
-        # flows through BMv2 (Phase B pilot's 100 Mbps load was almost
-        # certainly being dropped by the receiver kernel without this).
         disable_l4_offload(net, ["h1", "h2"])
+
+        bmv2_pids = _collect_bmv2_pids(net)
+        switch_ifaces = _collect_switch_ifaces(topo)
 
         bg = BackgroundTraffic(
             net=net,
@@ -294,23 +335,29 @@ def _run_latency(
         )
         bg.start()
         try:
-            if warmup_s > 0:
-                logger.info("  warmup %.1fs", warmup_s)
-                time.sleep(warmup_s)
-            return run_probe(
-                net=net,
-                sender_host="h1",
-                receiver_host="h2",
-                sender_mac=h1_mac,
-                receiver_mac=h2_mac,
-                sender_ip=h1_ip if probe_layer == "l3" else None,
-                receiver_ip=h2_ip if probe_layer == "l3" else None,
-                probe_layer=probe_layer,
-                n_probes=n_probes,
-                probe_interval_ms=probe_interval_ms,
-                packet_size_bytes=packet_size_bytes,
-                sequence_start=repetition * n_probes,
-            )
+            with ResourceMonitor(
+                sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
+                target_processes=bmv2_pids,
+                target_interfaces=switch_ifaces,
+            ) as mon:
+                if warmup_s > 0:
+                    logger.info("  warmup %.1fs", warmup_s)
+                    time.sleep(warmup_s)
+                primary = run_probe(
+                    net=net,
+                    sender_host="h1",
+                    receiver_host="h2",
+                    sender_mac=h1_mac,
+                    receiver_mac=h2_mac,
+                    sender_ip=h1_ip if probe_layer == "l3" else None,
+                    receiver_ip=h2_ip if probe_layer == "l3" else None,
+                    probe_layer=probe_layer,
+                    n_probes=n_probes,
+                    probe_interval_ms=probe_interval_ms,
+                    packet_size_bytes=packet_size_bytes,
+                    sequence_start=repetition * n_probes,
+                )
+            return primary, mon.samples()
         finally:
             bg.stop()
     finally:
@@ -322,7 +369,9 @@ def _run_latency(
 # ---------------------------------------------------------------------------
 
 
-def _run_saturation_sweep(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+def _run_saturation_sweep(
+    cfg: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from p4net import Network
 
     p4_path = _p4_path(str(cfg["p4_program"]))
@@ -368,21 +417,145 @@ def _run_saturation_sweep(cfg: dict[str, Any]) -> list[dict[str, Any]]:
                 ]
             )
         disable_l4_offload(net, ["h1", "h2"])
+        bmv2_pids = _collect_bmv2_pids(net)
+        switch_ifaces = _collect_switch_ifaces(topo)
 
-        return find_sustainable_load(
+        with ResourceMonitor(
+            sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
+            target_processes=bmv2_pids,
+            target_interfaces=switch_ifaces,
+        ) as mon:
+            primary = find_sustainable_load(
+                net=net,
+                sender_host="h1",
+                receiver_host="h2",
+                sender_ip=h1_ip,
+                receiver_ip=h2_ip,
+                sender_mac=h1_mac,
+                receiver_mac=h2_mac,
+                rates_mbps=rates_mbps,
+                n_probes_per_rate=n_probes,
+                probe_interval_ms=probe_interval_ms,
+                packet_size_bytes=packet_size_bytes,
+                duration_s=duration_s,
+            )
+        return primary, mon.samples()
+    finally:
+        net.stop()
+
+
+# ---------------------------------------------------------------------------
+# Resource-only workload (RQ4 direct).
+# ---------------------------------------------------------------------------
+
+
+def _run_resource_only(
+    cfg: dict[str, Any],
+) -> tuple[None, list[dict[str, Any]]]:
+    """Bring up the topology, optionally start background traffic, run the
+    resource monitor for ``duration_s``. No latency probe, no control-plane
+    operation — just resource sampling under load.
+    """
+    from p4net import Network
+
+    p4_path = _p4_path(str(cfg["p4_program"]))
+    topology_name = str(cfg.get("topology", "single_switch"))
+    n_switches = int(cfg.get("n_switches", 1))
+    rate_mbps = int(cfg.get("background_load_mbps", 0))
+    duration_s = float(cfg.get("duration_s", 60))
+
+    h1_ip = _bare_ip(H1_IP)
+    h2_ip = _bare_ip(H2_IP)
+    h1_mac = H1_MAC
+    h2_mac = H2_MAC
+
+    if topology_name == "linear_n":
+        topo = build_linear_n(
+            n_switches=n_switches,
+            p4_program=p4_path,
+            subnet_per_switch=False,
+        )
+    elif topology_name == "single_switch":
+        topo = build_single_switch(p4_path)
+    else:
+        raise ValueError(f"unsupported topology {topology_name!r} for resource_only")
+
+    net = Network(topo)
+    net.start()
+    try:
+        # Only program forwarding when background traffic is needed; the
+        # idle baseline case skips it so we measure BMv2 doing nothing.
+        if rate_mbps > 0:
+            if topology_name == "single_switch":
+                for ip, mac, port in ((h1_ip, h1_mac, 1), (h2_ip, h2_mac, 2)):
+                    net.switch("s1").client.insert_table_entry(
+                        "MyIngress.ipv4_lpm",
+                        {"hdr.ipv4.dst_addr": f"{ip}/32"},
+                        "MyIngress.set_nhop",
+                        {"nhop_mac": mac, "port": port},
+                    )
+            else:
+                # Linear-N L3 forwarding for background traffic to traverse
+                # the full chain: each switch points the dst toward port 2
+                # if dst==h2 else port 1, with the next-hop MAC matching
+                # the endpoint host (a stand-in — the action does not
+                # require a real MAC for forwarding to function).
+                for i in range(1, n_switches + 1):
+                    sw = net.switch(f"s{i}")
+                    sw.client.insert_table_entry(
+                        "MyIngress.ipv4_lpm",
+                        {"hdr.ipv4.dst_addr": f"{h2_ip}/32"},
+                        "MyIngress.set_nhop",
+                        {"nhop_mac": h2_mac, "port": 2},
+                    )
+                    sw.client.insert_table_entry(
+                        "MyIngress.ipv4_lpm",
+                        {"hdr.ipv4.dst_addr": f"{h1_ip}/32"},
+                        "MyIngress.set_nhop",
+                        {"nhop_mac": h1_mac, "port": 1},
+                    )
+            for host_name, peer_ip, peer_mac in (
+                ("h1", h2_ip, h2_mac),
+                ("h2", h1_ip, h1_mac),
+            ):
+                net.host(host_name).exec(
+                    [
+                        "ip",
+                        "neigh",
+                        "replace",
+                        peer_ip,
+                        "lladdr",
+                        peer_mac,
+                        "dev",
+                        f"{host_name}-eth0",
+                        "nud",
+                        "permanent",
+                    ]
+                )
+            disable_l4_offload(net, ["h1", "h2"])
+
+        bmv2_pids = _collect_bmv2_pids(net)
+        switch_ifaces = _collect_switch_ifaces(topo)
+
+        bg = BackgroundTraffic(
             net=net,
             sender_host="h1",
             receiver_host="h2",
             sender_ip=h1_ip,
             receiver_ip=h2_ip,
-            sender_mac=h1_mac,
-            receiver_mac=h2_mac,
-            rates_mbps=rates_mbps,
-            n_probes_per_rate=n_probes,
-            probe_interval_ms=probe_interval_ms,
-            packet_size_bytes=packet_size_bytes,
-            duration_s=duration_s,
+            rate_mbps=rate_mbps,
         )
+        bg.start()
+        try:
+            with ResourceMonitor(
+                sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
+                target_processes=bmv2_pids,
+                target_interfaces=switch_ifaces,
+            ) as mon:
+                time.sleep(duration_s)
+            return None, mon.samples()
+        finally:
+            bg.stop()
     finally:
         net.stop()
 
@@ -392,7 +565,9 @@ def _run_saturation_sweep(cfg: dict[str, Any]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _run_control_plane(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
+def _run_control_plane(
+    cfg: dict[str, Any], repetition: int
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from p4net import Network
 
     topology_name = str(cfg.get("topology", "linear_n"))
@@ -419,21 +594,27 @@ def _run_control_plane(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
         switches = [f"s{i}" for i in range(1, n_switches + 1)]
         table_name = "MyIngress.ipv4_lpm"
         gen = default_lpm_entry_generator(seed=repetition)
+        bmv2_pids = _collect_bmv2_pids(net)
+        switch_ifaces = _collect_switch_ifaces(topo)
 
-        if operation == "read":
-            # Reads need entries to exist; populate via the matching
-            # mode so we measure read against state installed by the
-            # same code path.
-            if mode == "sync":
-                run_insert_sync(net, switches, table_name, n_entries, gen)
-                return run_read_sync(net, switches, table_name)
-            run_insert_async(net, switches, table_name, n_entries, gen)
-            return run_read_async(net, switches, table_name)
-
-        # Insert
-        if mode == "sync":
-            return run_insert_sync(net, switches, table_name, n_entries, gen)
-        return run_insert_async(net, switches, table_name, n_entries, gen)
+        with ResourceMonitor(
+            sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
+            target_processes=bmv2_pids,
+            target_interfaces=switch_ifaces,
+        ) as mon:
+            if operation == "read":
+                if mode == "sync":
+                    run_insert_sync(net, switches, table_name, n_entries, gen)
+                    primary = run_read_sync(net, switches, table_name)
+                else:
+                    run_insert_async(net, switches, table_name, n_entries, gen)
+                    primary = run_read_async(net, switches, table_name)
+            else:
+                if mode == "sync":
+                    primary = run_insert_sync(net, switches, table_name, n_entries, gen)
+                else:
+                    primary = run_insert_async(net, switches, table_name, n_entries, gen)
+        return primary, mon.samples()
     finally:
         net.stop()
 
@@ -557,6 +738,82 @@ def _write_control_plane_result(
         },
     }
     fh.write(json.dumps(record) + "\n")
+    fh.flush()
+
+
+def _resource_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
+    """Common per-sample config payload for RQ4 resource records."""
+    return {
+        "p4_program": str(cfg.get("p4_program", "")),
+        "topology": str(cfg.get("topology", "single_switch")),
+        "n_switches": int(cfg.get("n_switches", 1)),
+        "background_load_mbps": int(cfg.get("background_load_mbps", 0)),
+        "source_workload_type": str(cfg.get("workload_type", "")),
+        "repetition": repetition,
+    }
+
+
+def _write_resource_samples(
+    fh: Any,
+    samples: list[dict[str, Any]],
+    run_id: str,
+    cfg: dict[str, Any],
+    repetition: int,
+) -> None:
+    """Emit one JSONL record per metric per sample (4 records per sample).
+
+    RQ4 records are tagged ``rq: 4`` regardless of the originating
+    workload so analysis can pull all resource time-series uniformly.
+    The original workload's ``rq`` and ``workload_type`` are preserved
+    in ``config.source_workload_type`` to support cross-tagging.
+    """
+    base_cfg = _resource_config_payload(cfg, repetition)
+    for sample_index, s in enumerate(samples):
+        ts_utc = _utc_now_iso()
+        cfg_with_index = {**base_cfg, "sample_index": sample_index}
+
+        per_pid_cpu = {str(pid): float(v) for pid, v in s["cpu_percent_per_bmv2"].items()}
+        per_pid_rss = {str(pid): int(v) for pid, v in s["rss_per_bmv2_bytes"].items()}
+        per_iface = s["net_io_per_iface"]
+        total_rx_pps = sum(float(v.get("rx_pps", 0.0)) for v in per_iface.values())
+
+        records = [
+            {
+                "metric": "cpu_percent_total",
+                "value": float(s["cpu_percent_total"]),
+                "extras": {"timestamp_us": int(s["timestamp_us"])},
+            },
+            {
+                "metric": "cpu_percent_per_bmv2",
+                "value": float(sum(per_pid_cpu.values())),
+                "extras": {
+                    "timestamp_us": int(s["timestamp_us"]),
+                    "per_pid": per_pid_cpu,
+                },
+            },
+            {
+                "metric": "rss_per_bmv2_bytes",
+                "value": float(sum(per_pid_rss.values())),
+                "extras": {
+                    "timestamp_us": int(s["timestamp_us"]),
+                    "per_pid": per_pid_rss,
+                },
+            },
+            {
+                "metric": "net_io_pps_per_iface",
+                "value": float(total_rx_pps),
+                "extras": {
+                    "timestamp_us": int(s["timestamp_us"]),
+                    "per_iface": per_iface,
+                },
+            },
+        ]
+        for r in records:
+            r["run_id"] = run_id
+            r["timestamp_utc"] = ts_utc
+            r["rq"] = 4
+            r["config"] = cfg_with_index
+            fh.write(json.dumps(r) + "\n")
     fh.flush()
 
 
