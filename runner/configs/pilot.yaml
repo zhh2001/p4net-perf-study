@@ -35,11 +35,22 @@ configs:
     repetitions: 1
     probe_interval_ms: 60.0
 
+  # MID load (~0.5 × R_max from saturation sweep)
   - rq: 1
     workload_type: latency_l3
     p4_program: l3_lpm
     packet_size_bytes: 256
-    background_load_mbps: 100
+    background_load_mbps: 25
+    n_probes: 100
+    repetitions: 1
+    probe_interval_ms: 60.0
+
+  # HIGH load (~0.9 × R_max, near-saturation but still <5% probe loss)
+  - rq: 1
+    workload_type: latency_l3
+    p4_program: l3_lpm
+    packet_size_bytes: 256
+    background_load_mbps: 45
     n_probes: 100
     repetitions: 1
     probe_interval_ms: 60.0
