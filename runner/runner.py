@@ -91,6 +91,7 @@ from workloads.control_plane_ops import (
     run_read_async,
     run_read_sync,
 )
+from workloads.int_collector import run_collection as run_int_collection
 from workloads.latency_probe import run_probe
 from workloads.resource_monitor import ResourceMonitor
 from workloads.saturation_sweep import find_sustainable_load
@@ -107,6 +108,7 @@ P4_PROGRAM_PATHS = {
     "l3_lpm": "p4/l3_lpm.p4",
     "l3_lpm_acl": "p4/l3_lpm_acl.p4",
     "l3_lpm_int": "p4/l3_lpm_int.p4",
+    "l3_lpm_int_chain": "p4/l3_lpm_int_chain.p4",
 }
 
 WORKLOAD_LATENCY_L2 = "latency_l2"
@@ -114,12 +116,14 @@ WORKLOAD_LATENCY_L3 = "latency_l3"
 WORKLOAD_CONTROL_PLANE = "control_plane"
 WORKLOAD_SATURATION_SWEEP = "saturation_sweep"
 WORKLOAD_RESOURCE_ONLY = "resource_only"
+WORKLOAD_INT_MULTIHOP = "int_multihop"
 KNOWN_WORKLOAD_TYPES = {
     WORKLOAD_LATENCY_L2,
     WORKLOAD_LATENCY_L3,
     WORKLOAD_CONTROL_PLANE,
     WORKLOAD_SATURATION_SWEEP,
     WORKLOAD_RESOURCE_ONLY,
+    WORKLOAD_INT_MULTIHOP,
 }
 
 
@@ -308,10 +312,21 @@ def main(argv: list[str] | None = None) -> int:
                             len(sweep_results),
                             len(resource_samples) * 4,
                         )
-                    else:  # WORKLOAD_RESOURCE_ONLY
+                    elif wl == WORKLOAD_RESOURCE_ONLY:
                         _, resource_samples = _run_resource_only(cfg, warmup_s, warmup_rate_mbps)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info("  → %d resource records", len(resource_samples) * 4)
+                    else:  # WORKLOAD_INT_MULTIHOP
+                        int_samples, resource_samples = _run_int_multihop(
+                            cfg, rep, warmup_s, warmup_rate_mbps
+                        )
+                        _write_int_samples(jsonl_fh, int_samples, run_id, cfg, rep)
+                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                        logger.info(
+                            "  → %d INT samples, %d resource records",
+                            len(int_samples),
+                            len(resource_samples) * 4,
+                        )
                 except Exception as exc:
                     logger.exception("Config failed: %s", exc)
                     _write_failure(jsonl_fh, exc, run_id, cfg, rep)
@@ -670,6 +685,140 @@ def _run_resource_only(
 
 
 # ---------------------------------------------------------------------------
+# RQ3 multi-hop INT workload.
+# ---------------------------------------------------------------------------
+
+
+def _run_int_multihop(
+    cfg: dict[str, Any],
+    repetition: int,
+    warmup_s: float,
+    warmup_rate_mbps: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Send INT-chain probes through a linear-N chain running
+    ``l3_lpm_int_chain.p4``. Returns ``(int_samples, resource_samples)``.
+
+    Every switch's ``MyEgress.switch_id_reg`` is pre-populated with the
+    switch's small-integer ID (s1→1, s2→2, …) so the data plane can
+    embed it in each shim. Forwarding entries route the L3 probe end
+    to end across the full chain (h1's IP → port 1 at every switch,
+    h2's IP → port 2 at every switch — the same convention used by
+    :mod:`topologies.linear_n`).
+    """
+    from p4net import Network
+
+    topology_name = str(cfg.get("topology", "linear_n"))
+    if topology_name != "linear_n":
+        raise ValueError(
+            f"only topology=linear_n is supported for int_multihop, got {topology_name!r}"
+        )
+
+    p4_path = _p4_path(str(cfg["p4_program"]))
+    n_switches = int(cfg["n_switches"])
+    n_probes = int(cfg["n_probes"])
+    probe_interval_ms = float(cfg["probe_interval_ms"])
+    packet_size_bytes = int(cfg["packet_size_bytes"])
+    rate_mbps = int(cfg.get("background_load_mbps", 0))
+
+    h1_ip = _bare_ip(H1_IP)
+    h2_ip = _bare_ip(H2_IP)
+    h1_mac = H1_MAC
+    h2_mac = H2_MAC
+
+    topo = build_linear_n(
+        n_switches=n_switches,
+        p4_program=p4_path,
+        subnet_per_switch=False,
+    )
+    net = Network(topo)
+    net.start()
+    try:
+        switch_names = [f"s{i}" for i in range(1, n_switches + 1)]
+        for idx, sw_name in enumerate(switch_names, start=1):
+            sw = net.switch(sw_name)
+            sw.client.write_register("MyEgress.switch_id_reg", 0, idx)
+            sw.client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dst_addr": f"{h1_ip}/32"},
+                "MyIngress.set_nhop",
+                {"nhop_mac": h1_mac, "port": 1},
+            )
+            sw.client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dst_addr": f"{h2_ip}/32"},
+                "MyIngress.set_nhop",
+                {"nhop_mac": h2_mac, "port": 2},
+            )
+        for host_name, peer_ip, peer_mac in (
+            ("h1", h2_ip, h2_mac),
+            ("h2", h1_ip, h1_mac),
+        ):
+            net.host(host_name).exec(
+                [
+                    "ip",
+                    "neigh",
+                    "replace",
+                    peer_ip,
+                    "lladdr",
+                    peer_mac,
+                    "dev",
+                    f"{host_name}-eth0",
+                    "nud",
+                    "permanent",
+                ]
+            )
+        disable_l4_offload(net, ["h1", "h2"])
+
+        bmv2_pids = _collect_bmv2_pids(net)
+        switch_ifaces = _collect_switch_ifaces(topo)
+
+        do_unified_warmup(
+            net=net,
+            sender_host="h1",
+            receiver_host="h2",
+            sender_ip=h1_ip,
+            receiver_ip=h2_ip,
+            warmup_seconds=warmup_s,
+            warmup_rate_mbps=warmup_rate_mbps,
+        )
+
+        bg = BackgroundTraffic(
+            net=net,
+            sender_host="h1",
+            receiver_host="h2",
+            sender_ip=h1_ip,
+            receiver_ip=h2_ip,
+            rate_mbps=rate_mbps,
+        )
+        bg.start()
+        try:
+            with ResourceMonitor(
+                sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
+                target_processes=bmv2_pids,
+                target_interfaces=switch_ifaces,
+            ) as mon:
+                primary = run_int_collection(
+                    net=net,
+                    sender_host="h1",
+                    receiver_host="h2",
+                    sender_mac=h1_mac,
+                    receiver_mac=h2_mac,
+                    sender_ip=h1_ip,
+                    receiver_ip=h2_ip,
+                    switch_names=switch_names,
+                    n_probes=n_probes,
+                    probe_interval_ms=probe_interval_ms,
+                    packet_size_bytes=packet_size_bytes,
+                    sequence_start=repetition * n_probes,
+                )
+            return primary, mon.samples()
+        finally:
+            bg.stop()
+    finally:
+        net.stop()
+
+
+# ---------------------------------------------------------------------------
 # Control-plane workload (RQ2).
 # ---------------------------------------------------------------------------
 
@@ -855,6 +1004,50 @@ def _write_control_plane_result(
         },
     }
     fh.write(json.dumps(record) + "\n")
+    fh.flush()
+
+
+def _int_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
+    return {
+        "p4_program": str(cfg["p4_program"]),
+        "topology": str(cfg.get("topology", "linear_n")),
+        "n_switches": int(cfg["n_switches"]),
+        "background_load_mbps": int(cfg.get("background_load_mbps", 0)),
+        "packet_size_bytes": int(cfg["packet_size_bytes"]),
+        "repetition": repetition,
+    }
+
+
+def _write_int_samples(
+    fh: Any,
+    samples: list[dict[str, Any]],
+    run_id: str,
+    cfg: dict[str, Any],
+    repetition: int,
+) -> None:
+    rq = int(cfg["rq"])
+    config_payload = _int_config_payload(cfg, repetition)
+    for s in samples:
+        record = {
+            "run_id": run_id,
+            "timestamp_utc": _utc_now_iso(),
+            "rq": rq,
+            "config": config_payload,
+            "metric": "int_drift_us",
+            "value": float(s["avg_drift_us"]),
+            "extras": {
+                "sequence": int(s["sequence"]),
+                "hop_count": int(s["hop_count"]),
+                "switch_ids": list(s["switch_ids"]),
+                "raw_ingress_us": list(s["raw_ingress_us"]),
+                "raw_egress_us": list(s["raw_egress_us"]),
+                "boot_us": list(s["boot_us"]),
+                "aligned_ingress_us": list(s["aligned_ingress_us"]),
+                "aligned_egress_us": list(s["aligned_egress_us"]),
+                "drift_us": list(s["drift_us"]),
+            },
+        }
+        fh.write(json.dumps(record) + "\n")
     fh.flush()
 
 

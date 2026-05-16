@@ -107,6 +107,43 @@ configs:
     mode: async
     repetitions: 5
 
+  # === RQ3 (new in Phase E) ===
+  # 2-hop INT chain, idle: baseline cross-switch drift on this rig.
+  - rq: 3
+    workload_type: int_multihop
+    p4_program: l3_lpm_int_chain
+    topology: linear_n
+    n_switches: 2
+    background_load_mbps: 0
+    n_probes: 100
+    repetitions: 1
+    probe_interval_ms: 60.0
+    packet_size_bytes: 256
+
+  # 2-hop INT chain, MID load: drift behaviour under sustainable load.
+  - rq: 3
+    workload_type: int_multihop
+    p4_program: l3_lpm_int_chain
+    topology: linear_n
+    n_switches: 2
+    background_load_mbps: 25
+    n_probes: 100
+    repetitions: 1
+    probe_interval_ms: 60.0
+    packet_size_bytes: 256
+
+  # 3-hop INT chain, idle: validates hop_count > 2 decode path.
+  - rq: 3
+    workload_type: int_multihop
+    p4_program: l3_lpm_int_chain
+    topology: linear_n
+    n_switches: 3
+    background_load_mbps: 0
+    n_probes: 100
+    repetitions: 1
+    probe_interval_ms: 60.0
+    packet_size_bytes: 256
+
   # === RQ4 (new in Phase D) ===
   # Idle baseline: single switch, no background load. Characterises
   # BMv2 steady-state cost just for being alive (event loop, gRPC
