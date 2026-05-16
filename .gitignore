@@ -27,7 +27,8 @@ htmlcov/
 # Measurement artifacts
 data/raw/*.jsonl
 data/raw/*.jsonl.gz
-data/raw/!.gitkeep
+data/raw/system_info_*.json
+!data/raw/.gitkeep
 
 # OS
 .DS_Store

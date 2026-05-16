@@ -1,0 +1,40 @@
+# Pilot RQ1 campaign — two minimal configurations exercising the full
+# runner pipeline (compile -> bring-up -> forwarding -> background ->
+# warmup -> probe -> cooldown -> JSONL) end-to-end.
+#
+# Both configurations share l3_lpm.p4 and 256-byte probes; they differ
+# only on the background load axis. The 0 Mbps case establishes a
+# clean switch-transit baseline; the 100 Mbps case exposes any latency
+# inflation from the BMv2 pipeline running additional UDP traffic
+# alongside the probe.
+#
+# Wall-clock budget per config:
+#   warmup (30s) + probe burst (100 * 60 ms = 6 s + 3 s drain)
+#   + cooldown (30s)  ~=  70 s
+# Two configs  ~=  140 s = ~2.3 minutes total.
+#
+# Subsequent phases add RQ2/3/4 configs and full-scale n_probes counts;
+# this pilot is scoped only to validate the end-to-end path.
+
+campaign:
+  name: rq1_pilot
+  seed: 42
+  cooldown_seconds: 30
+  warmup_seconds: 30
+
+configs:
+  - rq: 1
+    p4_program: l3_lpm
+    packet_size_bytes: 256
+    background_load_mbps: 0
+    n_probes: 100
+    repetitions: 1
+    probe_interval_ms: 60.0
+
+  - rq: 1
+    p4_program: l3_lpm
+    packet_size_bytes: 256
+    background_load_mbps: 100
+    n_probes: 100
+    repetitions: 1
+    probe_interval_ms: 60.0
