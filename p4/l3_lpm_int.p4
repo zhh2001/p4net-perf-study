@@ -145,15 +145,16 @@ control MyEgress(inout headers hdr, inout metadata meta,
     register<bit<8>>(1) switch_id_reg;
 
     apply {
+        /* INT processing is probe-only: only frames whose IPv4 protocol
+         * was 0xFD reached parse_instrument and have hdr.instrument valid.
+         * Background IPv4 traffic (TCP/UDP/ICMP/etc.) bypasses both the
+         * shim insertion and the ETHERTYPE_INT rewrite so the receiver
+         * kernel still sees ether_type 0x0800 and delivers to its IP
+         * stack — necessary for iperf3 and other userspace consumers. */
         if (hdr.instrument.isValid()) {
-            hdr.instrument.egress_ts = (bit<48>) std.egress_global_timestamp;
-        }
-        /* Insert INT shim on every forwarded packet. Probe frames keep
-         * their existing etherType (0x88B5) chained through the shim so
-         * the receiver can still recover the instrument header. */
-        if (std.egress_spec != 0 && hdr.ipv4.isValid()) {
             bit<8> sid;
             switch_id_reg.read(sid, 0);
+            hdr.instrument.egress_ts = (bit<48>) std.egress_global_timestamp;
             hdr.int_shim.setValid();
             hdr.int_shim.switch_id            = sid;
             hdr.int_shim.ingress_timestamp_us = (bit<48>) std.ingress_global_timestamp;
