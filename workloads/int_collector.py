@@ -256,7 +256,7 @@ def run_collection(
                 send_argv,
                 check=False,
                 capture_output=True,
-                timeout=ideal_send_seconds + 30.0,
+                timeout=ideal_send_seconds + 60.0,
             )
             if send_result.returncode != 0:
                 raise RuntimeError(
@@ -333,22 +333,30 @@ def _wait_for_ready(path: Path, timeout: float, proc: Any) -> None:
 
 
 def _send_main(args: argparse.Namespace) -> int:
-    from scapy.all import sendp
+    from scapy.all import conf
 
+    # Same socket-reuse rationale as workloads.latency_probe._send_main:
+    # scapy.sendp opens/closes a socket on every call (~50 ms each),
+    # which is fine for 100-probe pilots but blows out the runner-side
+    # timeout at 1000-probe matrix scale. Cache the L2 socket.
+    sock = conf.L2socket(iface=args.iface)
     interval_s = float(args.probe_interval_ms) / 1000.0
-    for i in range(args.n_probes):
-        seq = args.sequence_start + i
-        pkt = build_int_probe(
-            sender_ip=args.sender_ip,
-            receiver_ip=args.receiver_ip,
-            sender_mac=args.sender_mac,
-            receiver_mac=args.receiver_mac,
-            sequence=seq,
-            packet_size_bytes=args.packet_size_bytes,
-        )
-        sendp(pkt, iface=args.iface, verbose=False)
-        if i < args.n_probes - 1:
-            time.sleep(interval_s)
+    try:
+        for i in range(args.n_probes):
+            seq = args.sequence_start + i
+            pkt = build_int_probe(
+                sender_ip=args.sender_ip,
+                receiver_ip=args.receiver_ip,
+                sender_mac=args.sender_mac,
+                receiver_mac=args.receiver_mac,
+                sequence=seq,
+                packet_size_bytes=args.packet_size_bytes,
+            )
+            sock.send(pkt)
+            if i < args.n_probes - 1:
+                time.sleep(interval_s)
+    finally:
+        sock.close()
     return 0
 
 

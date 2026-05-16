@@ -280,11 +280,15 @@ def run_probe(
                     "--receiver-ip",
                     str(receiver_ip),
                 ]
+            # Timeout headroom: even with the L2-socket optimisation in
+            # _send_main, scapy plus kernel send-buffer pressure adds
+            # 10-50 ms per probe under high carrier load. 60 s of
+            # headroom comfortably absorbs that at 1000 probes.
             send_result = sender.exec(
                 send_argv,
                 check=False,
                 capture_output=True,
-                timeout=ideal_send_seconds + 30.0,
+                timeout=ideal_send_seconds + 60.0,
             )
             if send_result.returncode != 0:
                 raise RuntimeError(
@@ -346,30 +350,40 @@ def _wait_for_ready(path: Path, timeout: float, proc: Any) -> None:
 
 
 def _send_main(args: argparse.Namespace) -> int:
-    from scapy.all import sendp
+    from scapy.all import conf
 
+    # Reuse a single L2 socket across all sends. ``scapy.sendp`` opens
+    # and closes a fresh socket per call, which adds ~50 ms of overhead
+    # per probe — small for the 100-probe pilot but it blows past the
+    # runner's sender timeout at the 1000-probe matrix scale (60 s
+    # ideal becomes ~110 s actual). Caching the socket cuts the
+    # overhead to a few μs per call.
+    sock = conf.L2socket(iface=args.iface)
     interval_s = float(args.probe_interval_ms) / 1000.0
-    for i in range(args.n_probes):
-        seq = args.sequence_start + i
-        if args.probe_layer == PROBE_LAYER_L2:
-            pkt = build_l2_probe(
-                sender_mac=args.sender_mac,
-                receiver_mac=args.receiver_mac,
-                sequence=seq,
-                packet_size_bytes=args.packet_size_bytes,
-            )
-        else:
-            pkt = build_l3_probe(
-                sender_ip=args.sender_ip,
-                receiver_ip=args.receiver_ip,
-                sender_mac=args.sender_mac,
-                receiver_mac=args.receiver_mac,
-                sequence=seq,
-                packet_size_bytes=args.packet_size_bytes,
-            )
-        sendp(pkt, iface=args.iface, verbose=False)
-        if i < args.n_probes - 1:
-            time.sleep(interval_s)
+    try:
+        for i in range(args.n_probes):
+            seq = args.sequence_start + i
+            if args.probe_layer == PROBE_LAYER_L2:
+                pkt = build_l2_probe(
+                    sender_mac=args.sender_mac,
+                    receiver_mac=args.receiver_mac,
+                    sequence=seq,
+                    packet_size_bytes=args.packet_size_bytes,
+                )
+            else:
+                pkt = build_l3_probe(
+                    sender_ip=args.sender_ip,
+                    receiver_ip=args.receiver_ip,
+                    sender_mac=args.sender_mac,
+                    receiver_mac=args.receiver_mac,
+                    sequence=seq,
+                    packet_size_bytes=args.packet_size_bytes,
+                )
+            sock.send(pkt)
+            if i < args.n_probes - 1:
+                time.sleep(interval_s)
+    finally:
+        sock.close()
     return 0
 
 
