@@ -150,12 +150,15 @@ def run_probe(
     tmpdir = Path(tempfile.mkdtemp(prefix="latency-probe-"))
     samples_path = tmpdir / "samples.json"
     ready_path = tmpdir / "ready"
+    done_path = tmpdir / "done"
     err_path = tmpdir / "receiver.stderr"
 
-    send_seconds = (n_probes - 1) * probe_interval_ms / 1000.0
-    # Capture window: covers the full send burst plus a 3s drain so any
-    # late-arriving probes still land before the sniffer stops.
-    capture_seconds = send_seconds + 3.0
+    ideal_send_seconds = (n_probes - 1) * probe_interval_ms / 1000.0
+    # Hard ceiling on how long the receiver runs if the done signal
+    # never arrives (sender crash, lost done-file, etc). Generous so
+    # legitimate scapy ``sendp`` overhead — a few ms per packet — never
+    # trips it; the normal path closes the receiver well before this.
+    max_capture_seconds = max(ideal_send_seconds * 2.0 + 10.0, 30.0)
 
     recv_argv = [
         sys.executable,
@@ -165,12 +168,16 @@ def run_probe(
         "receive",
         "--iface",
         r_iface,
-        "--capture-seconds",
-        f"{capture_seconds:.3f}",
+        "--max-capture-seconds",
+        f"{max_capture_seconds:.3f}",
+        "--drain-seconds",
+        "3.0",
         "--samples-path",
         str(samples_path),
         "--ready-path",
         str(ready_path),
+        "--done-path",
+        str(done_path),
     ]
 
     with open(err_path, "wb") as err_fh:
@@ -209,14 +216,19 @@ def run_probe(
                 send_argv,
                 check=False,
                 capture_output=True,
-                timeout=send_seconds + 30.0,
+                timeout=ideal_send_seconds + 30.0,
             )
             if send_result.returncode != 0:
                 raise RuntimeError(
                     f"sender exited rc={send_result.returncode} stderr={send_result.stderr!r}"
                 )
 
-            rc = recv_proc.wait(timeout=capture_seconds + 15.0)
+            # Signal end-of-burst to the receiver so it can drain in
+            # peace and stop the sniffer, instead of guessing how long
+            # the sender will take.
+            done_path.write_text("done\n", encoding="utf-8")
+
+            rc = recv_proc.wait(timeout=max_capture_seconds + 15.0)
             if rc != 0:
                 err = err_path.read_text(encoding="utf-8", errors="replace")
                 raise RuntimeError(f"receiver exited rc={rc}: {err}")
@@ -310,8 +322,19 @@ def _receive_main(args: argparse.Namespace) -> int:
     sniffer.start()
     # Signal ready after the socket is bound.
     Path(args.ready_path).write_text("ready\n", encoding="utf-8")
+    done_path = Path(args.done_path)
+    drain_s = float(args.drain_seconds)
+    max_s = float(args.max_capture_seconds)
+    deadline = time.monotonic() + max_s
     try:
-        time.sleep(float(args.capture_seconds))
+        # Block until the orchestrator signals "sender finished" — then
+        # drain for `drain_s` so probes still in flight land — or fall
+        # back to a hard ceiling so a crashed sender can't pin us.
+        while time.monotonic() < deadline:
+            if done_path.exists():
+                time.sleep(drain_s)
+                break
+            time.sleep(0.05)
     finally:
         sniffer.stop()
     Path(args.samples_path).write_text(json.dumps(samples), encoding="utf-8")
@@ -336,9 +359,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--packet-size-bytes", type=int)
     parser.add_argument("--sequence-start", type=int, default=0)
     # receive-mode args
-    parser.add_argument("--capture-seconds", type=float)
+    parser.add_argument("--max-capture-seconds", type=float)
+    parser.add_argument("--drain-seconds", type=float, default=3.0)
     parser.add_argument("--samples-path")
     parser.add_argument("--ready-path")
+    parser.add_argument("--done-path")
     args = parser.parse_args(argv)
     if args.mode == "send":
         return _send_main(args)
