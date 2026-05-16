@@ -1,42 +1,46 @@
-# Pilot campaign — exercises the full runner pipeline across both
-# research questions covered by Phase C.
+# Pilot campaign — exercises the full runner pipeline across all four
+# research questions.
 #
-# Layout:
-#
-#   RQ1 latency (3 configs, 1 rep each)
-#     - l3_lpm  @ 256B / 0   Mbps background  (Phase B baseline)
-#     - l3_lpm  @ 256B / 100 Mbps background  (Phase B baseline)
-#     - l2_forward @ 256B / 0 Mbps background (new in Phase C — L2 probe)
-#
-#   RQ2 control-plane (4 configs, 5 reps each)
-#     - linear_n N=2, K=100 inserts, sync
-#     - linear_n N=2, K=100 inserts, async
-#     - linear_n N=2, K=100 reads,   sync
-#     - linear_n N=2, K=100 reads,   async
-#
-# Total: 7 configs / 23 measurement records. Estimated wall-clock
-# ~15 minutes including per-rep network bring-up + 30s cooldown after
-# each repetition.
+# Phase F methodology: continuous-carrier. Every measurement config
+# specifies the background load that runs throughout warmup AND
+# measurement (no warmup-then-stop). A single special case —
+# ``cold_idle_reference: true`` paired with background_load_mbps: 0 —
+# skips the carrier entirely so we keep a cold-baseline data point for
+# the paper §5.2 contrast.
 
 campaign:
   name: rq1_rq2_pilot
   seed: 42
   cooldown_seconds: 30
   warmup_seconds: 30
-  warmup_rate_mbps: 1  # unified warmup load (Phase E methodology fix)
 
 configs:
-  # === RQ1 L3 (Phase B baseline) ===
+  # === RQ1 L3 — Phase F grid ===
+  # Cold-idle reference: NO carrier, probes only. Used to characterise
+  # the cold-path regime (paper §5.2 contrast).
   - rq: 1
     workload_type: latency_l3
     p4_program: l3_lpm
     packet_size_bytes: 256
     background_load_mbps: 0
+    cold_idle_reference: true
     n_probes: 100
     repetitions: 1
     probe_interval_ms: 60.0
 
-  # MID load (~0.5 × R_max from saturation sweep)
+  # Warm baseline: 1 Mbps continuous carrier keeps caches hot.
+  # Replaces Phase D/E's "0 Mbps" config as the canonical comparison
+  # point for under-load measurements.
+  - rq: 1
+    workload_type: latency_l3
+    p4_program: l3_lpm
+    packet_size_bytes: 256
+    background_load_mbps: 1
+    n_probes: 100
+    repetitions: 1
+    probe_interval_ms: 60.0
+
+  # MID load (~0.5 × R_max from saturation sweep).
   - rq: 1
     workload_type: latency_l3
     p4_program: l3_lpm
@@ -46,7 +50,7 @@ configs:
     repetitions: 1
     probe_interval_ms: 60.0
 
-  # HIGH load (~0.9 × R_max, near-saturation but still <5% probe loss)
+  # HIGH load (~0.9 × R_max, near-saturation).
   - rq: 1
     workload_type: latency_l3
     p4_program: l3_lpm
@@ -56,17 +60,18 @@ configs:
     repetitions: 1
     probe_interval_ms: 60.0
 
-  # === RQ1 L2 (new in Phase C) ===
+  # === RQ1 L2 — cold-idle reference for l2_forward.p4 ===
   - rq: 1
     workload_type: latency_l2
     p4_program: l2_forward
     packet_size_bytes: 256
     background_load_mbps: 0
+    cold_idle_reference: true
     n_probes: 100
     repetitions: 1
     probe_interval_ms: 60.0
 
-  # === RQ2 (new in Phase C) ===
+  # === RQ2 (Phase C) ===
   - rq: 2
     workload_type: control_plane
     p4_program: l3_lpm
@@ -107,20 +112,19 @@ configs:
     mode: async
     repetitions: 5
 
-  # === RQ3 (new in Phase E) ===
-  # 2-hop INT chain, idle: baseline cross-switch drift on this rig.
+  # === RQ3 (Phase E) — now with continuous carrier per config ===
   - rq: 3
     workload_type: int_multihop
     p4_program: l3_lpm_int_chain
     topology: linear_n
     n_switches: 2
     background_load_mbps: 0
+    cold_idle_reference: true
     n_probes: 100
     repetitions: 1
     probe_interval_ms: 60.0
     packet_size_bytes: 256
 
-  # 2-hop INT chain, MID load: drift behaviour under sustainable load.
   - rq: 3
     workload_type: int_multihop
     p4_program: l3_lpm_int_chain
@@ -132,34 +136,29 @@ configs:
     probe_interval_ms: 60.0
     packet_size_bytes: 256
 
-  # 3-hop INT chain, idle: validates hop_count > 2 decode path.
   - rq: 3
     workload_type: int_multihop
     p4_program: l3_lpm_int_chain
     topology: linear_n
     n_switches: 3
     background_load_mbps: 0
+    cold_idle_reference: true
     n_probes: 100
     repetitions: 1
     probe_interval_ms: 60.0
     packet_size_bytes: 256
 
-  # === RQ4 (new in Phase D) ===
-  # Idle baseline: single switch, no background load. Characterises
-  # BMv2 steady-state cost just for being alive (event loop, gRPC
-  # idle, JSON-loaded pipeline) before any traffic hits it.
+  # === RQ4 (Phase D) ===
   - rq: 4
     workload_type: resource_only
     p4_program: l3_lpm
     topology: single_switch
     n_switches: 1
     background_load_mbps: 0
+    cold_idle_reference: true
     duration_s: 60
     repetitions: 1
 
-  # Loaded multi-switch: linear-N=4 carrying MID-rate background
-  # traffic end-to-end. Surfaces how BMv2 CPU/RSS/throughput scale
-  # with chain length under a known-sustainable load.
   - rq: 4
     workload_type: resource_only
     p4_program: l3_lpm

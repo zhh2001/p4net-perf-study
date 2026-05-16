@@ -1,108 +1,96 @@
-"""Unit tests for the unified warmup helper in :mod:`runner.runner`.
+"""Unit tests for the continuous-carrier helper in :mod:`runner.runner`.
+
+Phase F replaced Phase E's warmup-then-stop pattern with continuous
+carrier traffic spanning warmup + measurement, with a single special
+case: ``cold_idle_reference: true`` skips the carrier entirely so we
+keep a cold-baseline data point for the paper §5.2 contrast.
 
 These tests don't bring up a real network; they patch
-``BackgroundTraffic`` and ``time.sleep`` and assert the call sequence
-``start(rate=warmup_rate_mbps) → sleep(warmup_seconds) → stop()`` is
-what the helper produces. The full end-to-end behaviour is exercised
-by the Phase E pilot run.
+``BackgroundTraffic`` and assert the call shape of
+``make_continuous_carrier``. The full end-to-end behaviour is
+exercised by the Phase F pilot run.
 """
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from runner.runner import do_unified_warmup
+from runner.runner import make_continuous_carrier
 
 
-def test_warmup_zero_seconds_is_noop() -> None:
-    """``warmup_seconds <= 0`` must not instantiate ``BackgroundTraffic``."""
+def test_carrier_zero_rate_returns_none() -> None:
+    """``rate_mbps <= 0`` is the cold-idle path: no BG instantiated."""
     with patch("runner.runner.BackgroundTraffic") as bg_class:
-        do_unified_warmup(
+        result = make_continuous_carrier(
             net=object(),
             sender_host="h1",
             receiver_host="h2",
             sender_ip="10.0.0.1",
             receiver_ip="10.0.0.2",
-            warmup_seconds=0.0,
-            warmup_rate_mbps=1,
+            rate_mbps=0,
         )
+        assert result is None
         bg_class.assert_not_called()
 
 
-def test_warmup_zero_rate_is_noop() -> None:
-    """``warmup_rate_mbps <= 0`` must not instantiate ``BackgroundTraffic``."""
+def test_carrier_negative_rate_returns_none() -> None:
+    """Defensive: negative rate is also a no-op."""
     with patch("runner.runner.BackgroundTraffic") as bg_class:
-        do_unified_warmup(
+        result = make_continuous_carrier(
             net=object(),
             sender_host="h1",
             receiver_host="h2",
             sender_ip="10.0.0.1",
             receiver_ip="10.0.0.2",
-            warmup_seconds=10.0,
-            warmup_rate_mbps=0,
+            rate_mbps=-1,
         )
+        assert result is None
         bg_class.assert_not_called()
 
 
-def test_warmup_call_sequence() -> None:
-    """Verify start(rate=...) → sleep(seconds) → stop() in that order."""
-    with (
-        patch("runner.runner.BackgroundTraffic") as bg_class,
-        patch("runner.runner.time.sleep") as sleep_mock,
-    ):
+def test_carrier_positive_rate_starts_bg_and_returns_instance() -> None:
+    """Positive rate constructs BackgroundTraffic with that rate and starts it."""
+    with patch("runner.runner.BackgroundTraffic") as bg_class:
         instance = MagicMock()
         bg_class.return_value = instance
 
-        do_unified_warmup(
+        result = make_continuous_carrier(
             net="dummy-net",
             sender_host="h1",
             receiver_host="h2",
             sender_ip="10.0.0.1",
             receiver_ip="10.0.0.2",
-            warmup_seconds=2.5,
-            warmup_rate_mbps=7,
+            rate_mbps=25,
         )
 
-        # BackgroundTraffic instantiated exactly once with the warmup rate
         bg_class.assert_called_once()
         kwargs = bg_class.call_args.kwargs
-        assert kwargs["rate_mbps"] == 7
+        assert kwargs["rate_mbps"] == 25
         assert kwargs["sender_host"] == "h1"
         assert kwargs["receiver_host"] == "h2"
         assert kwargs["sender_ip"] == "10.0.0.1"
         assert kwargs["receiver_ip"] == "10.0.0.2"
-
-        # Order: start → sleep → stop
         instance.start.assert_called_once_with()
-        sleep_mock.assert_called_once_with(2.5)
-        instance.stop.assert_called_once_with()
-
-        # Lifecycle ordering: start before sleep before stop
-        assert instance.start.call_count == 1
-        assert instance.stop.call_count == 1
+        # Critically: stop is NOT called here — caller is responsible.
+        instance.stop.assert_not_called()
+        assert result is instance
 
 
-def test_warmup_stops_bg_even_when_sleep_raises() -> None:
-    """If the warmup is interrupted mid-sleep, BackgroundTraffic.stop()
-    must still be called so the iperf3 child processes don't leak."""
-    with (
-        patch("runner.runner.BackgroundTraffic") as bg_class,
-        patch("runner.runner.time.sleep", side_effect=KeyboardInterrupt),
-    ):
+def test_carrier_caller_owns_stop_lifecycle() -> None:
+    """The helper does not call ``stop()``; the workload's ``finally`` does."""
+    with patch("runner.runner.BackgroundTraffic") as bg_class:
         instance = MagicMock()
         bg_class.return_value = instance
 
-        with pytest.raises(KeyboardInterrupt):
-            do_unified_warmup(
-                net="dummy-net",
-                sender_host="h1",
-                receiver_host="h2",
-                sender_ip="10.0.0.1",
-                receiver_ip="10.0.0.2",
-                warmup_seconds=10.0,
-                warmup_rate_mbps=1,
-            )
+        carrier = make_continuous_carrier(
+            net="dummy",
+            sender_host="h1",
+            receiver_host="h2",
+            sender_ip="10.0.0.1",
+            receiver_ip="10.0.0.2",
+            rate_mbps=1,
+        )
+        # Simulate the workload finishing and stopping the carrier itself.
+        carrier.stop()
         instance.start.assert_called_once()
-        instance.stop.assert_called_once()
+        instance.stop.assert_called_once_with()

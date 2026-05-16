@@ -22,32 +22,39 @@ Config dispatch — each block must carry a ``workload_type`` field:
 * ``resource_only`` — RQ4 direct CPU/RSS/throughput sampling under
   background load, no latency probe alongside.
 
-Unified warmup policy (Phase E onward)
---------------------------------------
+Continuous-carrier methodology (Phase F onward)
+-----------------------------------------------
 
-Phase D revealed that the cold-cache 0 Mbps RQ1 baseline (216 μs)
-was systematically *higher* than the under-load medians (134/142 μs)
-because steady background traffic warms BMv2's CPU caches, branch
-predictors, and the kernel veth path between probes. To make every
-configuration's measurement window comparable, **every** config —
-regardless of its measurement-window background load — gets the same
-fixed-rate warmup BEFORE measurement starts:
+Phase E's pilot tested a warmup-then-stop pattern (run BG at 1 Mbps
+for 30 s, stop it, then measure with probes only). That made the
+asymmetry *worse*: 0 Mbps post-warmup hit 523 μs while 25 / 45 Mbps
+under-load measurements landed at 108-109 μs. The diagnosis: BMv2's
+fast-path needs *continuous* traffic to keep CPU caches, branch
+predictors, and the kernel veth path warm; the 16 pps probe rate is
+too sparse to sustain warm state on its own, and the gap between
+warmup-end and measurement-start lets everything cool back down.
+
+Phase F adopts continuous carrier::
 
     Phase 1 (warmup, no metrics recorded):
-        BackgroundTraffic.start(rate=campaign.warmup_rate_mbps)
+        BackgroundTraffic.start(rate=cfg.background_load_mbps)
         sleep(campaign.warmup_seconds)
-        BackgroundTraffic.stop()
-    Phase 2 (measurement, metrics recorded):
-        BackgroundTraffic.start(rate=cfg.background_load_mbps)  # 0 = no-op
+    Phase 2 (measurement, metrics recorded — carrier STILL running):
         ResourceMonitor.__enter__()
         <primary workload>
         ResourceMonitor.__exit__()
+    Phase 3 (teardown):
         BackgroundTraffic.stop()
 
-The warmup rate defaults to 1 Mbps — high enough to keep caches and
-the veth path active, low enough not to consume measurable BMv2 CPU.
-ResourceMonitor samples only the measurement phase so the warmup
-period doesn't pollute the time-series.
+A single special case — ``cold_idle_reference: true`` in the config,
+typically paired with ``background_load_mbps: 0`` — skips the
+carrier entirely so we preserve a cold-baseline data point for the
+paper §5.2 contrast.
+
+The campaign-level ``warmup_rate_mbps`` key from Phase E is
+**deprecated** (still parsed for back-compat, ignored at runtime,
+warning emitted once). The carrier rate now follows each config's
+own ``background_load_mbps``.
 
 If a single configuration block fails, a ``metric: "config_failure"``
 record is written and the campaign continues — one bad cell does not
@@ -97,7 +104,6 @@ from workloads.resource_monitor import ResourceMonitor
 from workloads.saturation_sweep import find_sustainable_load
 
 RESOURCE_SAMPLE_INTERVAL_S = 0.1
-DEFAULT_WARMUP_RATE_MBPS = 1
 
 logger = logging.getLogger("runner")
 
@@ -169,38 +175,35 @@ def _collect_switch_ifaces(topo: Any) -> list[str]:
     return ifaces
 
 
-def do_unified_warmup(
+def make_continuous_carrier(
     net: Any,
     sender_host: str,
     receiver_host: str,
     sender_ip: str,
     receiver_ip: str,
-    warmup_seconds: float,
-    warmup_rate_mbps: int,
-) -> None:
-    """Run a fixed-rate background traffic burn-in before measurement.
+    rate_mbps: int,
+) -> Any:
+    """Start a continuous background-traffic carrier at ``rate_mbps``.
 
-    Idempotent and side-effect-free with respect to metrics: nothing is
-    recorded during the warmup window. Returns once the warmup
-    background traffic has been started, slept through, and stopped.
-    No-op if ``warmup_seconds <= 0`` or ``warmup_rate_mbps <= 0``.
+    The carrier runs from before warmup through the end of measurement
+    so the BMv2 fast-path stays warm under representative load
+    throughout. Returns the started :class:`BackgroundTraffic` instance
+    (the caller is responsible for invoking ``.stop()`` after the
+    measurement window), or ``None`` if ``rate_mbps <= 0`` — the
+    cold-idle reference case.
     """
-    if warmup_seconds <= 0 or warmup_rate_mbps <= 0:
-        return
-    logger.info("  warmup %.1fs at %d Mbps", warmup_seconds, warmup_rate_mbps)
-    warmup_bg = BackgroundTraffic(
+    if rate_mbps <= 0:
+        return None
+    bg = BackgroundTraffic(
         net=net,
         sender_host=sender_host,
         receiver_host=receiver_host,
         sender_ip=sender_ip,
         receiver_ip=receiver_ip,
-        rate_mbps=warmup_rate_mbps,
+        rate_mbps=rate_mbps,
     )
-    warmup_bg.start()
-    try:
-        time.sleep(float(warmup_seconds))
-    finally:
-        warmup_bg.stop()
+    bg.start()
+    return bg
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -232,7 +235,12 @@ def main(argv: list[str] | None = None) -> int:
     seed = int(campaign["campaign"]["seed"])
     cooldown_s = float(campaign["campaign"].get("cooldown_seconds", 30))
     warmup_s = float(campaign["campaign"].get("warmup_seconds", 30))
-    warmup_rate_mbps = int(campaign["campaign"].get("warmup_rate_mbps", DEFAULT_WARMUP_RATE_MBPS))
+    if "warmup_rate_mbps" in campaign["campaign"]:
+        logger.warning(
+            "campaign.warmup_rate_mbps is deprecated since Phase F (continuous-carrier "
+            "methodology) — the carrier rate now follows each config's "
+            "background_load_mbps. Ignoring the campaign-level value."
+        )
     configs: list[dict[str, Any]] = list(campaign["configs"])
 
     rng = random.Random(seed)
@@ -278,9 +286,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 try:
                     if wl in (WORKLOAD_LATENCY_L2, WORKLOAD_LATENCY_L3):
-                        samples, resource_samples = _run_latency(
-                            cfg, rep, warmup_s, warmup_rate_mbps
-                        )
+                        samples, resource_samples = _run_latency(cfg, rep, warmup_s)
                         _write_latency_samples(jsonl_fh, samples, run_id, cfg, rep)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info(
@@ -289,9 +295,7 @@ def main(argv: list[str] | None = None) -> int:
                             len(resource_samples) * 4,
                         )
                     elif wl == WORKLOAD_CONTROL_PLANE:
-                        result, resource_samples = _run_control_plane(
-                            cfg, rep, warmup_s, warmup_rate_mbps
-                        )
+                        result, resource_samples = _run_control_plane(cfg, rep, warmup_s)
                         _write_control_plane_result(jsonl_fh, result, run_id, cfg, rep)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info(
@@ -302,9 +306,7 @@ def main(argv: list[str] | None = None) -> int:
                             len(resource_samples) * 4,
                         )
                     elif wl == WORKLOAD_SATURATION_SWEEP:
-                        sweep_results, resource_samples = _run_saturation_sweep(
-                            cfg, warmup_s, warmup_rate_mbps
-                        )
+                        sweep_results, resource_samples = _run_saturation_sweep(cfg, warmup_s)
                         _write_saturation_sweep(jsonl_fh, sweep_results, run_id, cfg, rep)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info(
@@ -313,13 +315,11 @@ def main(argv: list[str] | None = None) -> int:
                             len(resource_samples) * 4,
                         )
                     elif wl == WORKLOAD_RESOURCE_ONLY:
-                        _, resource_samples = _run_resource_only(cfg, warmup_s, warmup_rate_mbps)
+                        _, resource_samples = _run_resource_only(cfg, warmup_s)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info("  → %d resource records", len(resource_samples) * 4)
                     else:  # WORKLOAD_INT_MULTIHOP
-                        int_samples, resource_samples = _run_int_multihop(
-                            cfg, rep, warmup_s, warmup_rate_mbps
-                        )
+                        int_samples, resource_samples = _run_int_multihop(cfg, rep, warmup_s)
                         _write_int_samples(jsonl_fh, int_samples, run_id, cfg, rep)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info(
@@ -348,7 +348,6 @@ def _run_latency(
     cfg: dict[str, Any],
     repetition: int,
     warmup_s: float,
-    warmup_rate_mbps: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from p4net import Network
 
@@ -413,28 +412,24 @@ def _run_latency(
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
 
-        # Phase 1: unified warmup (probes deliberately omitted)
-        do_unified_warmup(
+        cold_idle = bool(cfg.get("cold_idle_reference", False))
+        carrier_rate = 0 if cold_idle else rate_mbps
+        carrier = make_continuous_carrier(
             net=net,
             sender_host="h1",
             receiver_host="h2",
             sender_ip=h1_ip,
             receiver_ip=h2_ip,
-            warmup_seconds=warmup_s,
-            warmup_rate_mbps=warmup_rate_mbps,
+            rate_mbps=carrier_rate,
         )
-
-        # Phase 2: measurement window at configured load
-        bg = BackgroundTraffic(
-            net=net,
-            sender_host="h1",
-            receiver_host="h2",
-            sender_ip=h1_ip,
-            receiver_ip=h2_ip,
-            rate_mbps=rate_mbps,
-        )
-        bg.start()
         try:
+            if warmup_s > 0:
+                logger.info(
+                    "  warmup %.1fs (carrier=%s)",
+                    warmup_s,
+                    "off (cold-idle)" if carrier is None else f"{carrier_rate} Mbps",
+                )
+                time.sleep(warmup_s)
             with ResourceMonitor(
                 sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
                 target_processes=bmv2_pids,
@@ -456,7 +451,8 @@ def _run_latency(
                 )
             return primary, mon.samples()
         finally:
-            bg.stop()
+            if carrier is not None:
+                carrier.stop()
     finally:
         net.stop()
 
@@ -469,7 +465,6 @@ def _run_latency(
 def _run_saturation_sweep(
     cfg: dict[str, Any],
     warmup_s: float,
-    warmup_rate_mbps: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from p4net import Network
 
@@ -519,15 +514,12 @@ def _run_saturation_sweep(
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
 
-        do_unified_warmup(
-            net=net,
-            sender_host="h1",
-            receiver_host="h2",
-            sender_ip=h1_ip,
-            receiver_ip=h2_ip,
-            warmup_seconds=warmup_s,
-            warmup_rate_mbps=warmup_rate_mbps,
-        )
+        # The sweep iterates rates internally, each rate sets up its own
+        # BackgroundTraffic. No pre-sweep continuous carrier is needed —
+        # each rate's BG acts as the warm-up for its own per-rate window.
+        if warmup_s > 0:
+            logger.info("  warmup %.1fs (no carrier — sweep per-rate self-warms)", warmup_s)
+            time.sleep(warmup_s)
 
         with ResourceMonitor(
             sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
@@ -561,7 +553,6 @@ def _run_saturation_sweep(
 def _run_resource_only(
     cfg: dict[str, Any],
     warmup_s: float,
-    warmup_rate_mbps: int,
 ) -> tuple[None, list[dict[str, Any]]]:
     """Bring up the topology, optionally start background traffic, run the
     resource monitor for ``duration_s``. No latency probe, no control-plane
@@ -648,29 +639,24 @@ def _run_resource_only(
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
 
-        # Unified warmup only useful when forwarding is wired up;
-        # idle-baseline configs (rate_mbps==0, no LPM/ARP) skip it.
-        if rate_mbps > 0:
-            do_unified_warmup(
-                net=net,
-                sender_host="h1",
-                receiver_host="h2",
-                sender_ip=h1_ip,
-                receiver_ip=h2_ip,
-                warmup_seconds=warmup_s,
-                warmup_rate_mbps=warmup_rate_mbps,
-            )
-
-        bg = BackgroundTraffic(
+        cold_idle = bool(cfg.get("cold_idle_reference", False))
+        carrier_rate = 0 if cold_idle else rate_mbps
+        carrier = make_continuous_carrier(
             net=net,
             sender_host="h1",
             receiver_host="h2",
             sender_ip=h1_ip,
             receiver_ip=h2_ip,
-            rate_mbps=rate_mbps,
+            rate_mbps=carrier_rate,
         )
-        bg.start()
         try:
+            if warmup_s > 0:
+                logger.info(
+                    "  warmup %.1fs (carrier=%s)",
+                    warmup_s,
+                    "off (cold-idle)" if carrier is None else f"{carrier_rate} Mbps",
+                )
+                time.sleep(warmup_s)
             with ResourceMonitor(
                 sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
                 target_processes=bmv2_pids,
@@ -679,7 +665,8 @@ def _run_resource_only(
                 time.sleep(duration_s)
             return None, mon.samples()
         finally:
-            bg.stop()
+            if carrier is not None:
+                carrier.stop()
     finally:
         net.stop()
 
@@ -693,7 +680,6 @@ def _run_int_multihop(
     cfg: dict[str, Any],
     repetition: int,
     warmup_s: float,
-    warmup_rate_mbps: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Send INT-chain probes through a linear-N chain running
     ``l3_lpm_int_chain.p4``. Returns ``(int_samples, resource_samples)``.
@@ -772,26 +758,24 @@ def _run_int_multihop(
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
 
-        do_unified_warmup(
+        cold_idle = bool(cfg.get("cold_idle_reference", False))
+        carrier_rate = 0 if cold_idle else rate_mbps
+        carrier = make_continuous_carrier(
             net=net,
             sender_host="h1",
             receiver_host="h2",
             sender_ip=h1_ip,
             receiver_ip=h2_ip,
-            warmup_seconds=warmup_s,
-            warmup_rate_mbps=warmup_rate_mbps,
+            rate_mbps=carrier_rate,
         )
-
-        bg = BackgroundTraffic(
-            net=net,
-            sender_host="h1",
-            receiver_host="h2",
-            sender_ip=h1_ip,
-            receiver_ip=h2_ip,
-            rate_mbps=rate_mbps,
-        )
-        bg.start()
         try:
+            if warmup_s > 0:
+                logger.info(
+                    "  warmup %.1fs (carrier=%s)",
+                    warmup_s,
+                    "off (cold-idle)" if carrier is None else f"{carrier_rate} Mbps",
+                )
+                time.sleep(warmup_s)
             with ResourceMonitor(
                 sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
                 target_processes=bmv2_pids,
@@ -813,7 +797,8 @@ def _run_int_multihop(
                 )
             return primary, mon.samples()
         finally:
-            bg.stop()
+            if carrier is not None:
+                carrier.stop()
     finally:
         net.stop()
 
@@ -827,7 +812,6 @@ def _run_control_plane(
     cfg: dict[str, Any],
     repetition: int,
     warmup_s: float,
-    warmup_rate_mbps: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from p4net import Network
 
@@ -859,9 +843,12 @@ def _run_control_plane(
         switch_ifaces = _collect_switch_ifaces(topo)
 
         # Control-plane workloads have no data-plane forwarding wired,
-        # so an iperf3-style warmup wouldn't have anywhere to land.
-        # Skip warmup; CPU caches are warmed by the gRPC bring-up itself.
-        _ = warmup_s, warmup_rate_mbps
+        # so a continuous-carrier warmup wouldn't have anywhere to land.
+        # Honour the campaign warmup_seconds as a plain wait so the gRPC
+        # stack has time to settle, but skip the carrier entirely.
+        if warmup_s > 0:
+            logger.info("  warmup %.1fs (no carrier — control-plane workload)", warmup_s)
+            time.sleep(warmup_s)
 
         with ResourceMonitor(
             sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
@@ -896,6 +883,7 @@ def _latency_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, A
         "packet_size_bytes": int(cfg["packet_size_bytes"]),
         "background_load_mbps": int(cfg["background_load_mbps"]),
         "probe_layer": "l2" if cfg["workload_type"] == WORKLOAD_LATENCY_L2 else "l3",
+        "cold_idle_reference": bool(cfg.get("cold_idle_reference", False)),
         "repetition": repetition,
     }
 
