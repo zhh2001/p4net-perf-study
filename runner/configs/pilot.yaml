@@ -1,29 +1,33 @@
-# Pilot RQ1 campaign — two minimal configurations exercising the full
-# runner pipeline (compile -> bring-up -> forwarding -> background ->
-# warmup -> probe -> cooldown -> JSONL) end-to-end.
+# Pilot campaign — exercises the full runner pipeline across both
+# research questions covered by Phase C.
 #
-# Both configurations share l3_lpm.p4 and 256-byte probes; they differ
-# only on the background load axis. The 0 Mbps case establishes a
-# clean switch-transit baseline; the 100 Mbps case exposes any latency
-# inflation from the BMv2 pipeline running additional UDP traffic
-# alongside the probe.
+# Layout:
 #
-# Wall-clock budget per config:
-#   warmup (30s) + probe burst (100 * 60 ms = 6 s + 3 s drain)
-#   + cooldown (30s)  ~=  70 s
-# Two configs  ~=  140 s = ~2.3 minutes total.
+#   RQ1 latency (3 configs, 1 rep each)
+#     - l3_lpm  @ 256B / 0   Mbps background  (Phase B baseline)
+#     - l3_lpm  @ 256B / 100 Mbps background  (Phase B baseline)
+#     - l2_forward @ 256B / 0 Mbps background (new in Phase C — L2 probe)
 #
-# Subsequent phases add RQ2/3/4 configs and full-scale n_probes counts;
-# this pilot is scoped only to validate the end-to-end path.
+#   RQ2 control-plane (4 configs, 5 reps each)
+#     - linear_n N=2, K=100 inserts, sync
+#     - linear_n N=2, K=100 inserts, async
+#     - linear_n N=2, K=100 reads,   sync
+#     - linear_n N=2, K=100 reads,   async
+#
+# Total: 7 configs / 23 measurement records. Estimated wall-clock
+# ~15 minutes including per-rep network bring-up + 30s cooldown after
+# each repetition.
 
 campaign:
-  name: rq1_pilot
+  name: rq1_rq2_pilot
   seed: 42
   cooldown_seconds: 30
   warmup_seconds: 30
 
 configs:
+  # === RQ1 L3 (Phase B baseline) ===
   - rq: 1
+    workload_type: latency_l3
     p4_program: l3_lpm
     packet_size_bytes: 256
     background_load_mbps: 0
@@ -32,9 +36,61 @@ configs:
     probe_interval_ms: 60.0
 
   - rq: 1
+    workload_type: latency_l3
     p4_program: l3_lpm
     packet_size_bytes: 256
     background_load_mbps: 100
     n_probes: 100
     repetitions: 1
     probe_interval_ms: 60.0
+
+  # === RQ1 L2 (new in Phase C) ===
+  - rq: 1
+    workload_type: latency_l2
+    p4_program: l2_forward
+    packet_size_bytes: 256
+    background_load_mbps: 0
+    n_probes: 100
+    repetitions: 1
+    probe_interval_ms: 60.0
+
+  # === RQ2 (new in Phase C) ===
+  - rq: 2
+    workload_type: control_plane
+    p4_program: l3_lpm
+    topology: linear_n
+    n_switches: 2
+    n_entries_per_switch: 100
+    operation: insert
+    mode: sync
+    repetitions: 5
+
+  - rq: 2
+    workload_type: control_plane
+    p4_program: l3_lpm
+    topology: linear_n
+    n_switches: 2
+    n_entries_per_switch: 100
+    operation: insert
+    mode: async
+    repetitions: 5
+
+  - rq: 2
+    workload_type: control_plane
+    p4_program: l3_lpm
+    topology: linear_n
+    n_switches: 2
+    n_entries_per_switch: 100
+    operation: read
+    mode: sync
+    repetitions: 5
+
+  - rq: 2
+    workload_type: control_plane
+    p4_program: l3_lpm
+    topology: linear_n
+    n_switches: 2
+    n_entries_per_switch: 100
+    operation: read
+    mode: async
+    repetitions: 5
