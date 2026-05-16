@@ -1,33 +1,49 @@
-"""L3 switch-transit latency probe for RQ1.
+"""Switch-transit latency probe for RQ1.
 
-The probe is a layer-3 UDP-free packet identified by IPv4 protocol byte
-``0xFD``. The data plane fills a 12-byte ``instrument_t`` header with
-its ingress and egress BMv2 global timestamps; the receiver reads them
-directly off the wire and reports ``egress_ts - ingress_ts`` as the
-switch-transit latency in microseconds. No external clock alignment is
-needed because both timestamps come from the same monotonic source.
+The probe is a custom-payload frame whose data plane fills a 12-byte
+``instrument_t`` header with its ingress and egress BMv2 global
+timestamps; the receiver reads them directly off the wire and reports
+``egress_ts - ingress_ts`` as the switch-transit latency in microseconds.
+Two wire formats are supported, selected by the ``probe_layer`` argument
+to :func:`run_probe`:
+
+* **L2** (``probe_layer="l2"``) — for ``l2_forward.p4`` and other
+  programs that key on the outer Ethernet etherType. The frame is::
+
+      Ethernet (14)  | dst=receiver_mac, src=sender_mac, type=0x88B5
+      instrument(12) | ingress_ts (48b BE) | egress_ts (48b BE)
+      seq      (4)   | sequence number (32b BE)
+      padding  (N)   | zero, to reach packet_size_bytes total
+
+  Minimum size 30 bytes (Eth + instrument + seq). Note that Linux pads
+  frames shorter than 60 bytes on egress, so the on-wire frame may be
+  larger than requested for very small probe sizes.
+
+* **L3** (``probe_layer="l3"``) — for the IPv4 forwarding programs
+  (``l3_lpm.p4`` and variants). The frame is::
+
+      Ethernet (14)  | dst=receiver_mac, src=sender_mac, type=0x0800
+      IPv4    (20)   | proto=0xFD (probe), src=sender_ip, dst=receiver_ip
+      instrument(12) | ingress_ts (48b BE) | egress_ts (48b BE)
+      seq      (4)   | sequence number (32b BE)
+      padding  (N)   | zero, to reach packet_size_bytes total
+
+  Minimum size 50 bytes (Eth + IPv4 + instrument + seq).
 
 Module surface:
 
 * :func:`run_probe` — orchestrates one probe campaign for the runner.
   Spawns a backgrounded receiver via :meth:`RunningHost.popen` and a
   blocking sender via :meth:`RunningHost.exec`, then collects samples
-  from the receiver's JSON output.
+  from the receiver's JSON output. Coordination via a ``ready`` file
+  (set by receiver after the sniffer is armed) and a ``done`` file
+  (set by orchestrator after the sender exits) so the receiver drains
+  for a bounded period regardless of scapy's actual send overhead.
 
 * ``python -m workloads.latency_probe --mode {send,receive}`` — child
-  entry-points executed inside the sender/receiver netns by
-  :func:`run_probe`. Kept in the same module so the wire format
-  definitions can't drift between sender, receiver, and orchestrator.
-
-Probe wire format (L3 path, this module):
-
-    Ethernet (14)  | dst=receiver_mac, src=sender_mac, type=0x0800
-    IPv4    (20)   | proto=0xFD (probe), src=sender_ip, dst=receiver_ip
-    instrument(12) | ingress_ts (48b BE) | egress_ts (48b BE)
-    seq      (4)   | sequence number (32b BE)
-    padding  (N)   | zero, to reach packet_size_bytes total
-
-Minimum total packet size is 50 bytes (Eth+IP+instrument+seq).
+  entrypoints executed inside the sender / receiver netns. Kept in
+  the same module so the wire format definitions can't drift between
+  sender, receiver, and orchestrator.
 """
 
 from __future__ import annotations
@@ -39,17 +55,28 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     import p4net
 
 
-IP_PROTO_PROBE = 0xFD
-INSTRUMENT_HEADER_BYTES = 12
+PROBE_LAYER_L2 = "l2"
+PROBE_LAYER_L3 = "l3"
+ProbeLayer = Literal["l2", "l3"]
+
+# Wire-format constants.
+ETHERTYPE_IPV4 = 0x0800
+ETHERTYPE_PROBE_L2 = 0x88B5  # IEEE local-experimental, matches l2_forward.p4.
+IP_PROTO_PROBE = 0xFD  # IANA "experimental, do not allocate".
+
+# Payload layout (after Ethernet, after IPv4 if L3) — same for both layers.
+INSTRUMENT_HEADER_BYTES = 12  # two big-endian 48-bit timestamps
 SEQ_BYTES = 4
-# Eth(14) + IPv4(20) + instrument(12) + seq(4)
-MIN_PROBE_BYTES = 14 + 20 + INSTRUMENT_HEADER_BYTES + SEQ_BYTES
+
+# Minimum on-wire frame sizes accepted by ``build_probe_packet``.
+MIN_PROBE_BYTES_L2 = 14 + INSTRUMENT_HEADER_BYTES + SEQ_BYTES
+MIN_PROBE_BYTES_L3 = 14 + 20 + INSTRUMENT_HEADER_BYTES + SEQ_BYTES
 
 
 def _iface_for(host_name: str) -> str:
@@ -62,7 +89,34 @@ def _iface_mac(iface: str) -> str:
     return Path(f"/sys/class/net/{iface}/address").read_text(encoding="utf-8").strip()
 
 
-def build_probe_packet(
+def _instrument_seq_padding(sequence: int, payload_bytes: int) -> bytes:
+    """The (instrument + seq + pad) suffix shared by both wire formats."""
+    instrument_bytes = b"\x00" * INSTRUMENT_HEADER_BYTES
+    seq_bytes = int(sequence).to_bytes(SEQ_BYTES, "big")
+    pad = b"\x00" * (payload_bytes - INSTRUMENT_HEADER_BYTES - SEQ_BYTES)
+    return instrument_bytes + seq_bytes + pad
+
+
+def build_l2_probe(
+    *,
+    sender_mac: str,
+    receiver_mac: str,
+    sequence: int,
+    packet_size_bytes: int,
+) -> Any:
+    """Construct one L2 probe (Eth(0x88B5) + instrument + seq + pad)."""
+    from scapy.all import Ether, Raw
+
+    if packet_size_bytes < MIN_PROBE_BYTES_L2:
+        raise ValueError(
+            f"packet_size_bytes={packet_size_bytes} below L2 minimum {MIN_PROBE_BYTES_L2}"
+        )
+    payload_bytes = packet_size_bytes - 14
+    payload = _instrument_seq_padding(sequence, payload_bytes)
+    return Ether(dst=receiver_mac, src=sender_mac, type=ETHERTYPE_PROBE_L2) / Raw(load=payload)
+
+
+def build_l3_probe(
     *,
     sender_ip: str,
     receiver_ip: str,
@@ -71,19 +125,15 @@ def build_probe_packet(
     sequence: int,
     packet_size_bytes: int,
 ) -> Any:
-    """Construct one probe packet. Returns a scapy ``Ether`` / ``IP`` / ``Raw``.
-
-    Lazily imports scapy so callers that only want the constants don't
-    pay the import cost.
-    """
+    """Construct one L3 probe (Eth + IPv4(proto=0xFD) + instrument + seq + pad)."""
     from scapy.all import IP, Ether, Raw
 
-    if packet_size_bytes < MIN_PROBE_BYTES:
-        raise ValueError(f"packet_size_bytes={packet_size_bytes} below minimum {MIN_PROBE_BYTES}")
-    pad_len = packet_size_bytes - MIN_PROBE_BYTES
-    instrument_bytes = b"\x00" * INSTRUMENT_HEADER_BYTES
-    seq_bytes = int(sequence).to_bytes(SEQ_BYTES, "big")
-    payload = instrument_bytes + seq_bytes + (b"\x00" * pad_len)
+    if packet_size_bytes < MIN_PROBE_BYTES_L3:
+        raise ValueError(
+            f"packet_size_bytes={packet_size_bytes} below L3 minimum {MIN_PROBE_BYTES_L3}"
+        )
+    payload_bytes = packet_size_bytes - 14 - 20
+    payload = _instrument_seq_padding(sequence, payload_bytes)
     return (
         Ether(dst=receiver_mac, src=sender_mac)
         / IP(src=sender_ip, dst=receiver_ip, proto=IP_PROTO_PROBE, ttl=64)
@@ -91,13 +141,13 @@ def build_probe_packet(
     )
 
 
-def _decode_sample(ip_payload: bytes) -> dict[str, int] | None:
-    """Parse an instrument+sequence payload. Returns ``None`` if too short."""
-    if len(ip_payload) < INSTRUMENT_HEADER_BYTES + SEQ_BYTES:
+def _decode_sample(payload: bytes) -> dict[str, int] | None:
+    """Parse instrument+sequence from the start of ``payload``."""
+    if len(payload) < INSTRUMENT_HEADER_BYTES + SEQ_BYTES:
         return None
-    ingress_ts = int.from_bytes(ip_payload[0:6], "big")
-    egress_ts = int.from_bytes(ip_payload[6:12], "big")
-    sequence = int.from_bytes(ip_payload[12:16], "big")
+    ingress_ts = int.from_bytes(payload[0:6], "big")
+    egress_ts = int.from_bytes(payload[6:12], "big")
+    sequence = int.from_bytes(payload[12:16], "big")
     return {
         "sequence": sequence,
         "ingress_ts_us": ingress_ts,
@@ -114,9 +164,11 @@ def run_probe(
     net: p4net.Network,
     sender_host: str,
     receiver_host: str,
-    sender_ip: str,
-    receiver_ip: str,
+    sender_mac: str,
     receiver_mac: str,
+    sender_ip: str | None,
+    receiver_ip: str | None,
+    probe_layer: ProbeLayer,
     n_probes: int,
     probe_interval_ms: float,
     packet_size_bytes: int,
@@ -124,7 +176,7 @@ def run_probe(
 ) -> list[dict[str, Any]]:
     """Send ``n_probes`` probes from ``sender_host`` to ``receiver_host``.
 
-    Returns one dict per *received* probe:
+    Returns one dict per *received* probe::
 
         {
             "sequence":          int,
@@ -136,7 +188,14 @@ def run_probe(
     Out-of-order delivery is keyed by ``sequence``. Dropped probes are
     silently absent from the returned list; callers can detect loss by
     comparing ``len(result)`` to ``n_probes``.
+
+    ``probe_layer`` selects the wire format (see module docstring).
+    L3 requires ``sender_ip`` and ``receiver_ip``; L2 ignores them.
     """
+    if probe_layer not in (PROBE_LAYER_L2, PROBE_LAYER_L3):
+        raise ValueError(f"probe_layer must be 'l2' or 'l3', got {probe_layer!r}")
+    if probe_layer == PROBE_LAYER_L3 and (sender_ip is None or receiver_ip is None):
+        raise ValueError("probe_layer='l3' requires sender_ip and receiver_ip")
     if n_probes < 1:
         raise ValueError("n_probes must be >= 1")
     if probe_interval_ms <= 0:
@@ -156,8 +215,8 @@ def run_probe(
     ideal_send_seconds = (n_probes - 1) * probe_interval_ms / 1000.0
     # Hard ceiling on how long the receiver runs if the done signal
     # never arrives (sender crash, lost done-file, etc). Generous so
-    # legitimate scapy ``sendp`` overhead — a few ms per packet — never
-    # trips it; the normal path closes the receiver well before this.
+    # legitimate scapy ``sendp`` overhead never trips it; the normal
+    # path closes the receiver via the done-file well before this.
     max_capture_seconds = max(ideal_send_seconds * 2.0 + 10.0, 30.0)
 
     recv_argv = [
@@ -168,6 +227,8 @@ def run_probe(
         "receive",
         "--iface",
         r_iface,
+        "--probe-layer",
+        probe_layer,
         "--max-capture-seconds",
         f"{max_capture_seconds:.3f}",
         "--drain-seconds",
@@ -197,10 +258,10 @@ def run_probe(
                 "send",
                 "--iface",
                 s_iface,
-                "--sender-ip",
-                sender_ip,
-                "--receiver-ip",
-                receiver_ip,
+                "--probe-layer",
+                probe_layer,
+                "--sender-mac",
+                sender_mac,
                 "--receiver-mac",
                 receiver_mac,
                 "--n-probes",
@@ -212,6 +273,13 @@ def run_probe(
                 "--sequence-start",
                 str(sequence_start),
             ]
+            if probe_layer == PROBE_LAYER_L3:
+                send_argv += [
+                    "--sender-ip",
+                    str(sender_ip),
+                    "--receiver-ip",
+                    str(receiver_ip),
+                ]
             send_result = sender.exec(
                 send_argv,
                 check=False,
@@ -280,18 +348,25 @@ def _wait_for_ready(path: Path, timeout: float, proc: Any) -> None:
 def _send_main(args: argparse.Namespace) -> int:
     from scapy.all import sendp
 
-    sender_mac = _iface_mac(args.iface)
     interval_s = float(args.probe_interval_ms) / 1000.0
     for i in range(args.n_probes):
         seq = args.sequence_start + i
-        pkt = build_probe_packet(
-            sender_ip=args.sender_ip,
-            receiver_ip=args.receiver_ip,
-            sender_mac=sender_mac,
-            receiver_mac=args.receiver_mac,
-            sequence=seq,
-            packet_size_bytes=args.packet_size_bytes,
-        )
+        if args.probe_layer == PROBE_LAYER_L2:
+            pkt = build_l2_probe(
+                sender_mac=args.sender_mac,
+                receiver_mac=args.receiver_mac,
+                sequence=seq,
+                packet_size_bytes=args.packet_size_bytes,
+            )
+        else:
+            pkt = build_l3_probe(
+                sender_ip=args.sender_ip,
+                receiver_ip=args.receiver_ip,
+                sender_mac=args.sender_mac,
+                receiver_mac=args.receiver_mac,
+                sequence=seq,
+                packet_size_bytes=args.packet_size_bytes,
+            )
         sendp(pkt, iface=args.iface, verbose=False)
         if i < args.n_probes - 1:
             time.sleep(interval_s)
@@ -304,11 +379,21 @@ def _send_main(args: argparse.Namespace) -> int:
 
 
 def _receive_main(args: argparse.Namespace) -> int:
-    from scapy.all import IP, AsyncSniffer
+    from scapy.all import IP, AsyncSniffer, Ether
 
     samples: list[dict[str, int]] = []
+    probe_layer = args.probe_layer
 
-    def on_packet(pkt: Any) -> None:
+    def on_packet_l2(pkt: Any) -> None:
+        if Ether not in pkt:
+            return
+        if int(pkt[Ether].type) != ETHERTYPE_PROBE_L2:
+            return
+        decoded = _decode_sample(bytes(pkt[Ether].payload))
+        if decoded is not None:
+            samples.append(decoded)
+
+    def on_packet_l3(pkt: Any) -> None:
         if IP not in pkt:
             return
         ip = pkt[IP]
@@ -317,6 +402,8 @@ def _receive_main(args: argparse.Namespace) -> int:
         decoded = _decode_sample(bytes(ip.payload))
         if decoded is not None:
             samples.append(decoded)
+
+    on_packet = on_packet_l2 if probe_layer == PROBE_LAYER_L2 else on_packet_l3
 
     sniffer = AsyncSniffer(iface=args.iface, prn=on_packet, store=False)
     sniffer.start()
@@ -347,13 +434,15 @@ def _receive_main(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="L3 latency probe sender/receiver child")
+    parser = argparse.ArgumentParser(description="L2/L3 latency probe sender/receiver child")
     parser.add_argument("--mode", choices=("send", "receive"), required=True)
     parser.add_argument("--iface", required=True)
+    parser.add_argument("--probe-layer", choices=(PROBE_LAYER_L2, PROBE_LAYER_L3), required=True)
     # send-mode args
+    parser.add_argument("--sender-mac")
+    parser.add_argument("--receiver-mac")
     parser.add_argument("--sender-ip")
     parser.add_argument("--receiver-ip")
-    parser.add_argument("--receiver-mac")
     parser.add_argument("--n-probes", type=int)
     parser.add_argument("--probe-interval-ms", type=float)
     parser.add_argument("--packet-size-bytes", type=int)
