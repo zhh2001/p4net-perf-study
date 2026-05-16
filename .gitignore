@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Measurement artifacts
+data/raw/*.jsonl
+data/raw/*.jsonl.gz
+data/raw/!.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
