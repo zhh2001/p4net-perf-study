@@ -1,23 +1,32 @@
 /* Shared instrumentation header for RQ1 latency probes.
  *
- * Probe packets are identified by an outer Ethernet etherType of 0x88B5
- * (IEEE Local Experimental Ethertype 1). After the Ethernet header the
- * parser conditionally extracts an `instrument_t` header that the data
- * plane fills with the BMv2 ingress and egress global timestamps. The
- * receiver-side capture reads these 12 bytes directly to recover the
- * pipeline-internal latency without external clock alignment.
+ * The data plane writes its ingress and egress BMv2 global timestamps
+ * into ``instrument_t`` so the receiver-side capture can recover the
+ * pipeline-internal latency without external clock alignment. The
+ * receiver reads these 12 bytes directly from the wire.
  *
- * Background (non-probe) traffic uses normal etherTypes and bypasses
- * the instrument extract entirely, so it has zero overhead.
+ * Probes are dispatched differently depending on the program family
+ * (constants are declared per-program rather than in this header so
+ * p4c does not warn about unused declarations in programs that only
+ * need one path):
  *
- * Included by every P4 program in the matrix to keep the probe wire
- * format consistent across configurations.
+ *   L2 programs (l2_forward.p4):
+ *     Outer Ethernet etherType 0x88B5 (IEEE local-experimental 1).
+ *     The instrument header follows the Ethernet header directly.
+ *
+ *   L3 programs (l3_lpm.p4, l3_lpm_acl.p4, l3_lpm_int.p4):
+ *     Outer Ethernet etherType 0x0800 (IPv4), IPv4 protocol byte 0xFD
+ *     (IANA "experimental, do not allocate"). The instrument header
+ *     follows the IPv4 header so the probe traverses the same parser
+ *     graph and the same forwarding tables as background IPv4 traffic.
+ *
+ * Background (non-probe) traffic uses normal etherTypes / protocol
+ * numbers and bypasses the instrument extract entirely, so it has zero
+ * overhead.
  */
 
 #ifndef _INSTRUMENT_P4H_
 #define _INSTRUMENT_P4H_
-
-const bit<16> ETHERTYPE_PROBE = 0x88B5;
 
 header instrument_t {
     bit<48> ingress_ts;

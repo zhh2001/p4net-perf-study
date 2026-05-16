@@ -16,6 +16,7 @@
 #include "include/instrument.p4h"
 
 const bit<16> ETHERTYPE_IPV4 = 0x0800;
+const bit<8>  IP_PROTO_PROBE = 0xFD;
 
 header ethernet_t {
     bit<48> dst_addr;
@@ -45,9 +46,9 @@ header l4_ports_t {
 
 struct headers {
     ethernet_t   ethernet;
-    instrument_t instrument;
     ipv4_t       ipv4;
     l4_ports_t   l4;
+    instrument_t instrument;
 }
 
 struct metadata {}
@@ -57,25 +58,25 @@ parser MyParser(packet_in pkt, out headers hdr, inout metadata meta,
     state start {
         pkt.extract(hdr.ethernet);
         transition select(hdr.ethernet.ether_type) {
-            ETHERTYPE_PROBE: parse_instrument;
-            ETHERTYPE_IPV4:  parse_ipv4;
+            ETHERTYPE_IPV4: parse_ipv4;
             default: accept;
         }
-    }
-    state parse_instrument {
-        pkt.extract(hdr.instrument);
-        transition parse_ipv4;
     }
     state parse_ipv4 {
         pkt.extract(hdr.ipv4);
         transition select(hdr.ipv4.protocol) {
-            6:  parse_l4;  // TCP
-            17: parse_l4;  // UDP
-            default: accept;
+            IP_PROTO_PROBE: parse_instrument;
+            6:              parse_l4;  // TCP
+            17:             parse_l4;  // UDP
+            default:        accept;
         }
     }
     state parse_l4 {
         pkt.extract(hdr.l4);
+        transition accept;
+    }
+    state parse_instrument {
+        pkt.extract(hdr.instrument);
         transition accept;
     }
 }
@@ -174,9 +175,9 @@ control MyComputeChecksum(inout headers hdr, inout metadata meta) {
 control MyDeparser(packet_out pkt, in headers hdr) {
     apply {
         pkt.emit(hdr.ethernet);
-        pkt.emit(hdr.instrument);
         pkt.emit(hdr.ipv4);
         pkt.emit(hdr.l4);
+        pkt.emit(hdr.instrument);
     }
 }
 

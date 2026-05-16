@@ -11,6 +11,8 @@
 #include <v1model.p4>
 #include "include/instrument.p4h"
 
+const bit<16> ETHERTYPE_PROBE = 0x88B5;
+
 header ethernet_t {
     bit<48> dst_addr;
     bit<48> src_addr;
