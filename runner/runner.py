@@ -2,22 +2,52 @@
 
 Reads a YAML campaign config, executes each configuration block in
 seeded-random order, and writes one JSONL record per captured sample
-(RQ1) or per repetition (RQ2) to ``data/raw/{name}_{run_id}.jsonl``.
+(RQ1, RQ3) or per repetition (RQ2) to ``data/raw/{name}_{run_id}.jsonl``.
 A single ``system_info`` snapshot is written alongside, one per
 runner invocation.
 
 Config dispatch — each block must carry a ``workload_type`` field:
 
-* ``latency_l2`` — L2 probe (Ethernet 0x88B5) against the named P4
-  program loaded on a single-switch topology. One JSONL record per
-  received probe; ``metric == "switch_transit_us"``.
-
-* ``latency_l3`` — L3 probe (IPv4 proto 0xFD). Otherwise identical to
-  ``latency_l2``.
+* ``latency_l2`` / ``latency_l3`` — RQ1 single-switch latency probes.
+  L2 path uses Ethernet etherType 0x88B5; L3 path uses IPv4 protocol
+  0xFD. One JSONL record per received probe; ``metric == "switch_transit_us"``.
 
 * ``control_plane`` — RQ2 multi-switch control-plane workload against
   a linear-N topology. One JSONL record per repetition;
   ``metric == "control_plane_wall_clock_s"``.
+
+* ``saturation_sweep`` — diagnostic (pre-RQ1 calibration). Sweeps
+  background load rates and reports per-rate probe loss + iperf3 ratio.
+
+* ``resource_only`` — RQ4 direct CPU/RSS/throughput sampling under
+  background load, no latency probe alongside.
+
+Unified warmup policy (Phase E onward)
+--------------------------------------
+
+Phase D revealed that the cold-cache 0 Mbps RQ1 baseline (216 μs)
+was systematically *higher* than the under-load medians (134/142 μs)
+because steady background traffic warms BMv2's CPU caches, branch
+predictors, and the kernel veth path between probes. To make every
+configuration's measurement window comparable, **every** config —
+regardless of its measurement-window background load — gets the same
+fixed-rate warmup BEFORE measurement starts:
+
+    Phase 1 (warmup, no metrics recorded):
+        BackgroundTraffic.start(rate=campaign.warmup_rate_mbps)
+        sleep(campaign.warmup_seconds)
+        BackgroundTraffic.stop()
+    Phase 2 (measurement, metrics recorded):
+        BackgroundTraffic.start(rate=cfg.background_load_mbps)  # 0 = no-op
+        ResourceMonitor.__enter__()
+        <primary workload>
+        ResourceMonitor.__exit__()
+        BackgroundTraffic.stop()
+
+The warmup rate defaults to 1 Mbps — high enough to keep caches and
+the veth path active, low enough not to consume measurable BMv2 CPU.
+ResourceMonitor samples only the measurement phase so the warmup
+period doesn't pollute the time-series.
 
 If a single configuration block fails, a ``metric: "config_failure"``
 record is written and the campaign continues — one bad cell does not
@@ -66,6 +96,7 @@ from workloads.resource_monitor import ResourceMonitor
 from workloads.saturation_sweep import find_sustainable_load
 
 RESOURCE_SAMPLE_INTERVAL_S = 0.1
+DEFAULT_WARMUP_RATE_MBPS = 1
 
 logger = logging.getLogger("runner")
 
@@ -134,6 +165,40 @@ def _collect_switch_ifaces(topo: Any) -> list[str]:
     return ifaces
 
 
+def do_unified_warmup(
+    net: Any,
+    sender_host: str,
+    receiver_host: str,
+    sender_ip: str,
+    receiver_ip: str,
+    warmup_seconds: float,
+    warmup_rate_mbps: int,
+) -> None:
+    """Run a fixed-rate background traffic burn-in before measurement.
+
+    Idempotent and side-effect-free with respect to metrics: nothing is
+    recorded during the warmup window. Returns once the warmup
+    background traffic has been started, slept through, and stopped.
+    No-op if ``warmup_seconds <= 0`` or ``warmup_rate_mbps <= 0``.
+    """
+    if warmup_seconds <= 0 or warmup_rate_mbps <= 0:
+        return
+    logger.info("  warmup %.1fs at %d Mbps", warmup_seconds, warmup_rate_mbps)
+    warmup_bg = BackgroundTraffic(
+        net=net,
+        sender_host=sender_host,
+        receiver_host=receiver_host,
+        sender_ip=sender_ip,
+        receiver_ip=receiver_ip,
+        rate_mbps=warmup_rate_mbps,
+    )
+    warmup_bg.start()
+    try:
+        time.sleep(float(warmup_seconds))
+    finally:
+        warmup_bg.stop()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="p4net-perf-study measurement runner")
     parser.add_argument("--config", type=Path, required=True, help="YAML campaign config")
@@ -163,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     seed = int(campaign["campaign"]["seed"])
     cooldown_s = float(campaign["campaign"].get("cooldown_seconds", 30))
     warmup_s = float(campaign["campaign"].get("warmup_seconds", 30))
+    warmup_rate_mbps = int(campaign["campaign"].get("warmup_rate_mbps", DEFAULT_WARMUP_RATE_MBPS))
     configs: list[dict[str, Any]] = list(campaign["configs"])
 
     rng = random.Random(seed)
@@ -208,7 +274,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 try:
                     if wl in (WORKLOAD_LATENCY_L2, WORKLOAD_LATENCY_L3):
-                        samples, resource_samples = _run_latency(cfg, rep, warmup_s)
+                        samples, resource_samples = _run_latency(
+                            cfg, rep, warmup_s, warmup_rate_mbps
+                        )
                         _write_latency_samples(jsonl_fh, samples, run_id, cfg, rep)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info(
@@ -217,7 +285,9 @@ def main(argv: list[str] | None = None) -> int:
                             len(resource_samples) * 4,
                         )
                     elif wl == WORKLOAD_CONTROL_PLANE:
-                        result, resource_samples = _run_control_plane(cfg, rep)
+                        result, resource_samples = _run_control_plane(
+                            cfg, rep, warmup_s, warmup_rate_mbps
+                        )
                         _write_control_plane_result(jsonl_fh, result, run_id, cfg, rep)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info(
@@ -228,7 +298,9 @@ def main(argv: list[str] | None = None) -> int:
                             len(resource_samples) * 4,
                         )
                     elif wl == WORKLOAD_SATURATION_SWEEP:
-                        sweep_results, resource_samples = _run_saturation_sweep(cfg)
+                        sweep_results, resource_samples = _run_saturation_sweep(
+                            cfg, warmup_s, warmup_rate_mbps
+                        )
                         _write_saturation_sweep(jsonl_fh, sweep_results, run_id, cfg, rep)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info(
@@ -237,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
                             len(resource_samples) * 4,
                         )
                     else:  # WORKLOAD_RESOURCE_ONLY
-                        _, resource_samples = _run_resource_only(cfg)
+                        _, resource_samples = _run_resource_only(cfg, warmup_s, warmup_rate_mbps)
                         _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                         logger.info("  → %d resource records", len(resource_samples) * 4)
                 except Exception as exc:
@@ -261,6 +333,7 @@ def _run_latency(
     cfg: dict[str, Any],
     repetition: int,
     warmup_s: float,
+    warmup_rate_mbps: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from p4net import Network
 
@@ -325,6 +398,18 @@ def _run_latency(
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
 
+        # Phase 1: unified warmup (probes deliberately omitted)
+        do_unified_warmup(
+            net=net,
+            sender_host="h1",
+            receiver_host="h2",
+            sender_ip=h1_ip,
+            receiver_ip=h2_ip,
+            warmup_seconds=warmup_s,
+            warmup_rate_mbps=warmup_rate_mbps,
+        )
+
+        # Phase 2: measurement window at configured load
         bg = BackgroundTraffic(
             net=net,
             sender_host="h1",
@@ -340,9 +425,6 @@ def _run_latency(
                 target_processes=bmv2_pids,
                 target_interfaces=switch_ifaces,
             ) as mon:
-                if warmup_s > 0:
-                    logger.info("  warmup %.1fs", warmup_s)
-                    time.sleep(warmup_s)
                 primary = run_probe(
                     net=net,
                     sender_host="h1",
@@ -371,6 +453,8 @@ def _run_latency(
 
 def _run_saturation_sweep(
     cfg: dict[str, Any],
+    warmup_s: float,
+    warmup_rate_mbps: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from p4net import Network
 
@@ -420,6 +504,16 @@ def _run_saturation_sweep(
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
 
+        do_unified_warmup(
+            net=net,
+            sender_host="h1",
+            receiver_host="h2",
+            sender_ip=h1_ip,
+            receiver_ip=h2_ip,
+            warmup_seconds=warmup_s,
+            warmup_rate_mbps=warmup_rate_mbps,
+        )
+
         with ResourceMonitor(
             sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
             target_processes=bmv2_pids,
@@ -451,6 +545,8 @@ def _run_saturation_sweep(
 
 def _run_resource_only(
     cfg: dict[str, Any],
+    warmup_s: float,
+    warmup_rate_mbps: int,
 ) -> tuple[None, list[dict[str, Any]]]:
     """Bring up the topology, optionally start background traffic, run the
     resource monitor for ``duration_s``. No latency probe, no control-plane
@@ -537,6 +633,19 @@ def _run_resource_only(
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
 
+        # Unified warmup only useful when forwarding is wired up;
+        # idle-baseline configs (rate_mbps==0, no LPM/ARP) skip it.
+        if rate_mbps > 0:
+            do_unified_warmup(
+                net=net,
+                sender_host="h1",
+                receiver_host="h2",
+                sender_ip=h1_ip,
+                receiver_ip=h2_ip,
+                warmup_seconds=warmup_s,
+                warmup_rate_mbps=warmup_rate_mbps,
+            )
+
         bg = BackgroundTraffic(
             net=net,
             sender_host="h1",
@@ -566,7 +675,10 @@ def _run_resource_only(
 
 
 def _run_control_plane(
-    cfg: dict[str, Any], repetition: int
+    cfg: dict[str, Any],
+    repetition: int,
+    warmup_s: float,
+    warmup_rate_mbps: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from p4net import Network
 
@@ -596,6 +708,11 @@ def _run_control_plane(
         gen = default_lpm_entry_generator(seed=repetition)
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
+
+        # Control-plane workloads have no data-plane forwarding wired,
+        # so an iperf3-style warmup wouldn't have anywhere to land.
+        # Skip warmup; CPU caches are warmed by the gRPC bring-up itself.
+        _ = warmup_s, warmup_rate_mbps
 
         with ResourceMonitor(
             sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,

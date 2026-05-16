@@ -23,6 +23,7 @@ campaign:
   seed: 42
   cooldown_seconds: 30
   warmup_seconds: 30
+  warmup_rate_mbps: 1  # unified warmup load (Phase E methodology fix)
 
 configs:
   # === RQ1 L3 (Phase B baseline) ===
