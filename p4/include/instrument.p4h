@@ -1,0 +1,27 @@
+/* Shared instrumentation header for RQ1 latency probes.
+ *
+ * Probe packets are identified by an outer Ethernet etherType of 0x88B5
+ * (IEEE Local Experimental Ethertype 1). After the Ethernet header the
+ * parser conditionally extracts an `instrument_t` header that the data
+ * plane fills with the BMv2 ingress and egress global timestamps. The
+ * receiver-side capture reads these 12 bytes directly to recover the
+ * pipeline-internal latency without external clock alignment.
+ *
+ * Background (non-probe) traffic uses normal etherTypes and bypasses
+ * the instrument extract entirely, so it has zero overhead.
+ *
+ * Included by every P4 program in the matrix to keep the probe wire
+ * format consistent across configurations.
+ */
+
+#ifndef _INSTRUMENT_P4H_
+#define _INSTRUMENT_P4H_
+
+const bit<16> ETHERTYPE_PROBE = 0x88B5;
+
+header instrument_t {
+    bit<48> ingress_ts;
+    bit<48> egress_ts;
+}
+
+#endif  /* _INSTRUMENT_P4H_ */
