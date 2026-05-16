@@ -62,6 +62,7 @@ from workloads.control_plane_ops import (
     run_read_sync,
 )
 from workloads.latency_probe import run_probe
+from workloads.saturation_sweep import find_sustainable_load
 
 logger = logging.getLogger("runner")
 
@@ -77,10 +78,12 @@ P4_PROGRAM_PATHS = {
 WORKLOAD_LATENCY_L2 = "latency_l2"
 WORKLOAD_LATENCY_L3 = "latency_l3"
 WORKLOAD_CONTROL_PLANE = "control_plane"
+WORKLOAD_SATURATION_SWEEP = "saturation_sweep"
 KNOWN_WORKLOAD_TYPES = {
     WORKLOAD_LATENCY_L2,
     WORKLOAD_LATENCY_L3,
     WORKLOAD_CONTROL_PLANE,
+    WORKLOAD_SATURATION_SWEEP,
 }
 
 
@@ -180,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
                         samples = _run_latency(cfg, rep, warmup_s)
                         _write_latency_samples(jsonl_fh, samples, run_id, cfg, rep)
                         logger.info("  → %d samples written", len(samples))
-                    else:
+                    elif wl == WORKLOAD_CONTROL_PLANE:
                         result = _run_control_plane(cfg, rep)
                         _write_control_plane_result(jsonl_fh, result, run_id, cfg, rep)
                         logger.info(
@@ -189,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
                             result["success_count"],
                             result["failure_count"],
                         )
+                    else:  # WORKLOAD_SATURATION_SWEEP
+                        sweep_results = _run_saturation_sweep(cfg)
+                        _write_saturation_sweep(jsonl_fh, sweep_results, run_id, cfg, rep)
+                        logger.info("  → %d sweep records written", len(sweep_results))
                 except Exception as exc:
                     logger.exception("Config failed: %s", exc)
                     _write_failure(jsonl_fh, exc, run_id, cfg, rep)
@@ -311,6 +318,76 @@ def _run_latency(
 
 
 # ---------------------------------------------------------------------------
+# Saturation sweep diagnostic (pre-RQ1 calibration).
+# ---------------------------------------------------------------------------
+
+
+def _run_saturation_sweep(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    from p4net import Network
+
+    p4_path = _p4_path(str(cfg["p4_program"]))
+    rates_mbps = [int(r) for r in cfg["rates_mbps"]]
+    n_probes = int(cfg.get("n_probes_per_rate", 100))
+    probe_interval_ms = float(cfg.get("probe_interval_ms", 60.0))
+    packet_size_bytes = int(cfg.get("packet_size_bytes", 256))
+    duration_s = int(cfg.get("duration_s", 60))
+
+    h1_ip = _bare_ip(H1_IP)
+    h2_ip = _bare_ip(H2_IP)
+    h1_mac = H1_MAC
+    h2_mac = H2_MAC
+
+    topo = build_single_switch(p4_path)
+    net = Network(topo)
+    net.start()
+    try:
+        sw = net.switch("s1")
+        for ip, mac, port in ((h1_ip, h1_mac, 1), (h2_ip, h2_mac, 2)):
+            sw.client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dst_addr": f"{ip}/32"},
+                "MyIngress.set_nhop",
+                {"nhop_mac": mac, "port": port},
+            )
+        for host_name, peer_ip, peer_mac in (
+            ("h1", h2_ip, h2_mac),
+            ("h2", h1_ip, h1_mac),
+        ):
+            net.host(host_name).exec(
+                [
+                    "ip",
+                    "neigh",
+                    "replace",
+                    peer_ip,
+                    "lladdr",
+                    peer_mac,
+                    "dev",
+                    f"{host_name}-eth0",
+                    "nud",
+                    "permanent",
+                ]
+            )
+        disable_l4_offload(net, ["h1", "h2"])
+
+        return find_sustainable_load(
+            net=net,
+            sender_host="h1",
+            receiver_host="h2",
+            sender_ip=h1_ip,
+            receiver_ip=h2_ip,
+            sender_mac=h1_mac,
+            receiver_mac=h2_mac,
+            rates_mbps=rates_mbps,
+            n_probes_per_rate=n_probes,
+            probe_interval_ms=probe_interval_ms,
+            packet_size_bytes=packet_size_bytes,
+            duration_s=duration_s,
+        )
+    finally:
+        net.stop()
+
+
+# ---------------------------------------------------------------------------
 # Control-plane workload (RQ2).
 # ---------------------------------------------------------------------------
 
@@ -386,6 +463,48 @@ def _control_plane_config_payload(cfg: dict[str, Any], repetition: int) -> dict[
         "mode": str(cfg["mode"]),
         "repetition": repetition,
     }
+
+
+def _write_saturation_sweep(
+    fh: Any,
+    sweep_results: list[dict[str, Any]],
+    run_id: str,
+    cfg: dict[str, Any],
+    repetition: int,
+) -> None:
+    rq = int(cfg["rq"])
+    for r in sweep_results:
+        config_payload = {
+            "p4_program": str(cfg["p4_program"]),
+            "rate_mbps": int(r["rate_mbps"]),
+            "n_probes": int(r["probes_sent"]),
+            "duration_s": int(cfg.get("duration_s", 60)),
+            "packet_size_bytes": int(cfg.get("packet_size_bytes", 256)),
+            "repetition": repetition,
+        }
+        record = {
+            "run_id": run_id,
+            "timestamp_utc": _utc_now_iso(),
+            "rq": rq,
+            "config": config_payload,
+            "metric": "saturation_probe_loss_pct",
+            "value": float(r["probe_loss_pct"]),
+            "extras": {
+                "probes_received": int(r["probes_received"]),
+                "median_us": float(r["median_us"]) if r["median_us"] == r["median_us"] else None,
+                "p99_us": float(r["p99_us"]) if r["p99_us"] == r["p99_us"] else None,
+                "p99_9_us": float(r["p99_9_us"]) if r["p99_9_us"] == r["p99_9_us"] else None,
+                "iperf3_received_bytes_pct": (
+                    float(r["iperf3_received_bytes_pct"])
+                    if r["iperf3_received_bytes_pct"] == r["iperf3_received_bytes_pct"]
+                    else None
+                ),
+                "rx_delta_bytes": int(r["rx_delta_bytes"]),
+                "rx_window_seconds": float(r["rx_window_seconds"]),
+            },
+        }
+        fh.write(json.dumps(record) + "\n")
+    fh.flush()
 
 
 def _write_latency_samples(

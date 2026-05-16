@@ -1,0 +1,27 @@
+# BMv2 saturation point diagnostic.
+#
+# Runs once before the RQ1 measurement matrix to pick background-load
+# values BMv2 can actually carry on this rig. Output goes to
+# data/raw/saturation_sweep_*.jsonl; analysis picks R_max as the
+# highest rate at which both probe-loss and iperf3-received-bytes
+# stay above 0.95 (i.e. loss < 5% and arrival >= 95% of nominal).
+#
+# Estimated wall-clock: 5 rates × 60s duration + cooldown + network
+# bring-up ≈ 7 minutes.
+
+campaign:
+  name: saturation_sweep
+  seed: 42
+  cooldown_seconds: 15
+  warmup_seconds: 0
+
+configs:
+  - rq: 0
+    workload_type: saturation_sweep
+    p4_program: l3_lpm
+    rates_mbps: [10, 25, 50, 75, 100]
+    n_probes_per_rate: 100
+    probe_interval_ms: 60.0
+    packet_size_bytes: 256
+    duration_s: 60
+    repetitions: 1
