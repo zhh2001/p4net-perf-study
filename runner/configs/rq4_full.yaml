@@ -1,0 +1,83 @@
+# RQ4 full matrix, replication 1 (Phase G).
+#
+# 8 explicit configs per experimental-matrix.md §9 (NOT a Cartesian
+# product — selected cells that span the (N, P4-program, load) cube).
+# Phase G migrated load values from the original 100/500 Mbps to
+# 1/45 Mbps consistent with the continuous-carrier methodology and
+# the empirically calibrated R_max = 50 Mbps saturation point.
+#
+# Per-config measurement: 60 s of resource sampling at 100 ms
+# cadence × 4 metrics = ~2 400 records per config.
+#
+# Wall-clock estimate: 8 configs × (30 s warmup + 60 s measure +
+# 30 s cooldown + ~5 s setup per switch) ≈ 18-22 minutes total.
+campaign:
+  name: rq4_full_rep1
+  seed: 42
+  warmup_seconds: 30
+  cooldown_seconds: 30
+configs:
+- rq: 4
+  workload_type: resource_only
+  p4_program: l3_lpm
+  topology: single_switch
+  n_switches: 1
+  background_load_mbps: 1
+  duration_s: 60
+  repetitions: 1
+- rq: 4
+  workload_type: resource_only
+  p4_program: l3_lpm
+  topology: single_switch
+  n_switches: 1
+  background_load_mbps: 45
+  duration_s: 60
+  repetitions: 1
+- rq: 4
+  workload_type: resource_only
+  p4_program: l3_lpm
+  topology: linear_n
+  n_switches: 4
+  background_load_mbps: 1
+  duration_s: 60
+  repetitions: 1
+- rq: 4
+  workload_type: resource_only
+  p4_program: l3_lpm
+  topology: linear_n
+  n_switches: 4
+  background_load_mbps: 45
+  duration_s: 60
+  repetitions: 1
+- rq: 4
+  workload_type: resource_only
+  p4_program: l3_lpm
+  topology: linear_n
+  n_switches: 8
+  background_load_mbps: 1
+  duration_s: 60
+  repetitions: 1
+- rq: 4
+  workload_type: resource_only
+  p4_program: l3_lpm_int
+  topology: linear_n
+  n_switches: 4
+  background_load_mbps: 1
+  duration_s: 60
+  repetitions: 1
+- rq: 4
+  workload_type: resource_only
+  p4_program: l3_lpm_acl
+  topology: linear_n
+  n_switches: 4
+  background_load_mbps: 1
+  duration_s: 60
+  repetitions: 1
+- rq: 4
+  workload_type: resource_only
+  p4_program: l3_lpm
+  topology: linear_n
+  n_switches: 8
+  background_load_mbps: 45
+  duration_s: 60
+  repetitions: 1
