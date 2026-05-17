@@ -1,0 +1,89 @@
+# RQ1 l3_lpm_int backfill, replication 1 (Phase G).
+#
+# 3 packet sizes × 3 carrier loads = 9 configs, 1000 probes each.
+# Fills the 9 matrix cells Phase F's rq1_full produced empty
+# because the pre-Phase-G l3_lpm_int.p4 rewrote ether_type to
+# 0x88B6 and the L3 latency_probe receiver could not decode the
+# resulting frames. With the Phase G commit 1 wire-format fix,
+# the same receiver path now works unchanged.
+#
+# Wall-clock estimate: 9 configs × (30 s warmup + 60 s probe +
+# 3 s drain + 30 s cooldown + ~5 s setup) ≈ 18 minutes.
+campaign:
+  name: rq1_int_backfill_rep1
+  seed: 42
+  warmup_seconds: 30
+  cooldown_seconds: 30
+configs:
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 64
+  background_load_mbps: 1
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 64
+  background_load_mbps: 25
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 64
+  background_load_mbps: 45
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 256
+  background_load_mbps: 1
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 256
+  background_load_mbps: 25
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 256
+  background_load_mbps: 45
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 1500
+  background_load_mbps: 1
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 1500
+  background_load_mbps: 25
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+- rq: 1
+  workload_type: latency_l3
+  p4_program: l3_lpm_int
+  packet_size_bytes: 1500
+  background_load_mbps: 45
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
