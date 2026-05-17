@@ -1,0 +1,81 @@
+# RQ3 full matrix, replication 1 (Phase G).
+#
+# 2 hop counts (N=2, N=3) × 3 carrier loads (0, 25, 45 Mbps) = 6
+# configs, 1000 INT probes each. Sampling-rate dimension (every Nth
+# packet INT-instrumented) deferred — see file docstring of
+# /tmp/gen_rq3_full.py for rationale and Phase G report §15.
+#
+# 0 Mbps in RQ3 means no iperf3 background but probes still flow
+# continuously through the INT chain at 16 pps; the receiver-side
+# drift noise (~±10 ms boot_timestamp_us floor) is the §7
+# measurement target, not a failure mode.
+#
+# Wall-clock estimate: 6 configs × (30 s warmup + 60 s probe +
+# 3 s drain + 30 s cooldown + ~5 s setup × N switches)
+# ≈ 13-15 minutes.
+campaign:
+  name: rq3_full_rep1
+  seed: 42
+  warmup_seconds: 30
+  cooldown_seconds: 30
+configs:
+- rq: 3
+  workload_type: int_multihop
+  p4_program: l3_lpm_int_chain
+  topology: linear_n
+  n_switches: 2
+  background_load_mbps: 0
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+  packet_size_bytes: 256
+- rq: 3
+  workload_type: int_multihop
+  p4_program: l3_lpm_int_chain
+  topology: linear_n
+  n_switches: 2
+  background_load_mbps: 25
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+  packet_size_bytes: 256
+- rq: 3
+  workload_type: int_multihop
+  p4_program: l3_lpm_int_chain
+  topology: linear_n
+  n_switches: 2
+  background_load_mbps: 45
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+  packet_size_bytes: 256
+- rq: 3
+  workload_type: int_multihop
+  p4_program: l3_lpm_int_chain
+  topology: linear_n
+  n_switches: 3
+  background_load_mbps: 0
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+  packet_size_bytes: 256
+- rq: 3
+  workload_type: int_multihop
+  p4_program: l3_lpm_int_chain
+  topology: linear_n
+  n_switches: 3
+  background_load_mbps: 25
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+  packet_size_bytes: 256
+- rq: 3
+  workload_type: int_multihop
+  p4_program: l3_lpm_int_chain
+  topology: linear_n
+  n_switches: 3
+  background_load_mbps: 45
+  n_probes: 1000
+  repetitions: 1
+  probe_interval_ms: 60.0
+  packet_size_bytes: 256
