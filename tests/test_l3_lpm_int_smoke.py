@@ -1,17 +1,20 @@
-"""Regression test for the Phase B open question on ``l3_lpm_int.p4``.
+"""Regression tests for ``l3_lpm_int.p4``.
 
-Before the Phase C fix, the egress control rewrote every forwarded IPv4
-packet's outer Ethernet etherType to ``ETHERTYPE_INT`` (0x88B6), so
-background iperf3 UDP traffic was delivered to the receiver kernel with
-an ether_type the IP stack does not handle and silently dropped. After
-the fix, the rewrite is conditioned on ``hdr.instrument.isValid()`` so
-only probe frames carry the INT shim; background IPv4 keeps its 0x0800
-etherType and the iperf3 server receives it normally.
+Phase C added the conditional INT branch (probe-only). Phase G further
+restructured the wire format so the L3 latency_probe receiver can
+decode probes through l3_lpm_int without modification — see the file
+header in ``p4/l3_lpm_int.p4`` for the format change rationale.
 
-The test brings up the single-switch topology against ``l3_lpm_int.p4``,
-runs iperf3 client → server for 5 seconds at 100 Mbps, and asserts the
-client-side JSON summary reports non-zero bytes received. Zero bytes
-would indicate the conditional fix has been undone.
+Two integration tests live here:
+
+* ``test_iperf3_through_l3_lpm_int`` — Phase C regression. Background
+  iperf3 UDP through l3_lpm_int still receives non-zero bytes (the
+  conditional etherType + shim-only-on-probe branch holds).
+
+* ``test_latency_probe_through_l3_lpm_int`` — Phase G regression. An
+  L3 latency probe through l3_lpm_int returns non-empty samples with
+  ``switch_transit_us > 0``; this is the fix that lets the 9 previously
+  missing l3_lpm_int RQ1 matrix cells produce measurable data.
 """
 
 from __future__ import annotations
@@ -150,3 +153,85 @@ def test_iperf3_through_l3_lpm_int(tmp_path: Path) -> None:
         )
     finally:
         net.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.requires_p4c
+@pytest.mark.requires_bmv2
+def test_latency_probe_through_l3_lpm_int(tmp_path: Path) -> None:
+    """An L3 probe through l3_lpm_int.p4 must return non-empty samples
+    with positive switch_transit_us.
+
+    The Phase G restructure keeps the outer Ethernet/IPv4 envelope
+    intact (no etherType rewrite) and appends the int_shim after the
+    instrument header. The receiver decodes the IPv4 frame normally;
+    the additional shim bytes sit between instrument and the
+    sequence + padding payload, which only affects the sequence-number
+    field's decoding — not the switch_transit_us calculation. So the
+    JSONL ``value`` column is correct; only ``extras.sequence`` is
+    garbled, which the aggregator does not use.
+    """
+    from p4net import Network
+
+    from runner.host_setup import disable_l4_offload
+    from topologies.single_switch import build
+    from workloads.latency_probe import run_probe
+
+    topo = build(REPO_ROOT / "p4" / "l3_lpm_int.p4")
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        sw = net.switch("s1")
+        for ip, mac, port in (
+            ("10.0.0.1", "00:00:00:00:00:01", 1),
+            ("10.0.0.2", "00:00:00:00:00:02", 2),
+        ):
+            sw.client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dst_addr": f"{ip}/32"},
+                "MyIngress.set_nhop",
+                {"nhop_mac": mac, "port": port},
+            )
+        for host_name, peer_ip, peer_mac in (
+            ("h1", "10.0.0.2", "00:00:00:00:00:02"),
+            ("h2", "10.0.0.1", "00:00:00:00:00:01"),
+        ):
+            net.host(host_name).exec(
+                [
+                    "ip",
+                    "neigh",
+                    "replace",
+                    peer_ip,
+                    "lladdr",
+                    peer_mac,
+                    "dev",
+                    f"{host_name}-eth0",
+                    "nud",
+                    "permanent",
+                ]
+            )
+        disable_l4_offload(net, ["h1", "h2"])
+
+        samples = run_probe(
+            net=net,
+            sender_host="h1",
+            receiver_host="h2",
+            sender_mac="00:00:00:00:00:01",
+            receiver_mac="00:00:00:00:00:02",
+            sender_ip="10.0.0.1",
+            receiver_ip="10.0.0.2",
+            probe_layer="l3",
+            n_probes=10,
+            probe_interval_ms=60.0,
+            packet_size_bytes=128,
+        )
+    finally:
+        net.stop()
+
+    assert len(samples) == 10, f"expected 10 samples, got {len(samples)}: {samples}"
+    for s in samples:
+        # The shim adds a fixed ~µs of egress work; switch_transit_us
+        # must still be a positive number on the order of single-digit
+        # to low-double-digit μs.
+        assert s["switch_transit_us"] > 0, f"non-positive transit: {s}"
+        assert s["switch_transit_us"] < 100_000, f"transit absurdly high: {s}"

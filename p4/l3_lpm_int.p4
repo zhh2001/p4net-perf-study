@@ -1,35 +1,37 @@
-/* IPv4 LPM forwarder + single-hop INT shim insertion for RQ1 and RQ3.
+/* IPv4 LPM forwarder + single-hop INT shim for RQ1 (INT-cost cell)
+ * and RQ4 (single-hop INT process cost).
  *
- * Pipeline: parse Ethernet → IPv4 (with optional probe instrument),
- * apply IPv4 LPM forwarding, then insert a 14-byte INT shim header
- * between Ethernet and IPv4 at egress. Shim format matches the
- * reference design used by p4net 1.7's ``int_multi_hop`` example so
- * RQ1 (single hop) and RQ3 (multi-hop) measurements share a comparable
- * wire format.
+ * Wire format (probe path only, identified by IPv4 protocol 0xFD):
  *
- * INT shim layout (14 bytes total, big-endian on the wire):
+ *     Ethernet (14)       — ether_type 0x0800 (unchanged through pipeline)
+ *     IPv4    (20)        — proto = 0xFD
+ *     instrument (12)     — ingress_ts + egress_ts written by data plane
+ *     int_shim   (13)     — switch_id + per-hop ingress_ts + egress_ts
+ *                           (emitted only when the probe enters the pipeline)
+ *     <payload>           — sequence + padding from sender
  *
- *     bit<8>  switch_id            — controller-configured identifier
- *     bit<48> ingress_timestamp_us — BMv2 ingress_global_timestamp
- *     bit<16> egress_port          — std.egress_spec
- *     bit<16> queue_depth          — std.deq_qdepth
- *     bit<16> next_proto           — original Ethernet etherType
- *     bit<8>  reserved             — zero
+ * Phase G restructure: the previous design rewrote the outer Ethernet
+ * etherType to 0x88B6 (INT) and inserted the shim between Ethernet and
+ * IPv4, which prevented the standard L3 latency-probe receiver from
+ * decoding the IPv4 layer — every l3_lpm_int RQ1 matrix cell came back
+ * with zero captured samples. The new format preserves the
+ * Ethernet+IPv4 outer envelope so generic IPv4 capture tools work
+ * unchanged; the int_shim is appended after the instrument header and
+ * the receiver simply ignores the extra bytes when it only needs
+ * switch_transit_us. Background (non-probe) traffic still bypasses
+ * shim insertion entirely.
  *
- * Outer Ethernet ``ether_type`` is rewritten to 0x88B6 (INT shim
- * identifier) when the shim is inserted. Probe-instrument frames
- * (etherType 0x88B5) bypass INT insertion entirely so the latency
- * measurement separates "INT cost" from "instrument cost".
+ * INT shim layout (13 bytes, big-endian on the wire):
  *
- * Switch identity comes from a register written by the control plane
- * at startup (same pattern as p4net 1.2+).
+ *     bit<8>  switch_id   — controller-configured (register at index 0)
+ *     bit<48> ingress_ts  — std.ingress_global_timestamp
+ *     bit<48> egress_ts   — std.egress_global_timestamp
  */
 #include <core.p4>
 #include <v1model.p4>
 #include "include/instrument.p4h"
 
 const bit<16> ETHERTYPE_IPV4 = 0x0800;
-const bit<16> ETHERTYPE_INT  = 0x88B6;
 const bit<8>  IP_PROTO_PROBE = 0xFD;
 
 header ethernet_t {
@@ -55,18 +57,15 @@ header ipv4_t {
 
 header int_shim_t {
     bit<8>  switch_id;
-    bit<48> ingress_timestamp_us;
-    bit<16> egress_port;
-    bit<16> queue_depth;
-    bit<16> next_proto;
-    bit<8>  reserved;
+    bit<48> ingress_ts;
+    bit<48> egress_ts;
 }
 
 struct headers {
     ethernet_t   ethernet;
-    int_shim_t   int_shim;
     ipv4_t       ipv4;
     instrument_t instrument;
+    int_shim_t   int_shim;
 }
 
 struct metadata {}
@@ -89,6 +88,10 @@ parser MyParser(packet_in pkt, out headers hdr, inout metadata meta,
     }
     state parse_instrument {
         pkt.extract(hdr.instrument);
+        /* The sender never emits an int_shim on its own; only switches
+         * append it on egress. Leave int_shim invalid here so the
+         * remaining bytes (sequence + padding) stay in the packet's
+         * unparsed tail and pass through unmodified. */
         transition accept;
     }
 }
@@ -145,24 +148,19 @@ control MyEgress(inout headers hdr, inout metadata meta,
     register<bit<8>>(1) switch_id_reg;
 
     apply {
-        /* INT processing is probe-only: only frames whose IPv4 protocol
-         * was 0xFD reached parse_instrument and have hdr.instrument valid.
-         * Background IPv4 traffic (TCP/UDP/ICMP/etc.) bypasses both the
-         * shim insertion and the ETHERTYPE_INT rewrite so the receiver
-         * kernel still sees ether_type 0x0800 and delivers to its IP
-         * stack — necessary for iperf3 and other userspace consumers. */
+        /* Probe-only: only frames whose IPv4 protocol was 0xFD reached
+         * parse_instrument and have hdr.instrument valid. Background
+         * IPv4 traffic bypasses both the timestamp write and the shim
+         * insertion entirely, keeping ether_type 0x0800 intact for the
+         * receiver kernel. */
         if (hdr.instrument.isValid()) {
             bit<8> sid;
             switch_id_reg.read(sid, 0);
             hdr.instrument.egress_ts = (bit<48>) std.egress_global_timestamp;
             hdr.int_shim.setValid();
-            hdr.int_shim.switch_id            = sid;
-            hdr.int_shim.ingress_timestamp_us = (bit<48>) std.ingress_global_timestamp;
-            hdr.int_shim.egress_port          = (bit<16>) std.egress_spec;
-            hdr.int_shim.queue_depth          = (bit<16>) std.deq_qdepth;
-            hdr.int_shim.next_proto           = hdr.ethernet.ether_type;
-            hdr.int_shim.reserved             = 0;
-            hdr.ethernet.ether_type           = ETHERTYPE_INT;
+            hdr.int_shim.switch_id  = sid;
+            hdr.int_shim.ingress_ts = (bit<48>) std.ingress_global_timestamp;
+            hdr.int_shim.egress_ts  = (bit<48>) std.egress_global_timestamp;
         }
     }
 }
@@ -185,9 +183,9 @@ control MyComputeChecksum(inout headers hdr, inout metadata meta) {
 control MyDeparser(packet_out pkt, in headers hdr) {
     apply {
         pkt.emit(hdr.ethernet);
-        pkt.emit(hdr.int_shim);
         pkt.emit(hdr.ipv4);
         pkt.emit(hdr.instrument);
+        pkt.emit(hdr.int_shim);
     }
 }
 
