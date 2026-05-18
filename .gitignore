@@ -29,6 +29,10 @@ data/raw/*.jsonl
 data/raw/*.jsonl.gz
 data/raw/system_info_*.json
 !data/raw/.gitkeep
+# Per-replication raw-data archive directories (Phase H onward).
+# The CSV summaries in data/summaries/ are the canonical, tracked
+# analysis input; the raw archives live only on disk + future Zenodo.
+data/raw_rep*/
 
 # OS
 .DS_Store
