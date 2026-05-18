@@ -18,9 +18,21 @@ right per-RQ aggregator based on the ``rq`` field, and writes::
 The experiment log records ``run_id``, source file, timestamp range,
 and the total record count per RQ for traceability.
 
+Output labeling (Phase H onward)
+---------------------------------
+
+The ``--label`` CLI argument appends a suffix to each output filename so
+multiple replication runs can coexist without overwriting. For
+example, ``--label rep2`` produces ``rq1_summary_rep2.csv``,
+``rq2_summary_rep2.csv``, etc. With no ``--label`` (default empty
+string), the unsuffixed names are used. Phase G's outputs were
+renamed to ``*_rep1.csv`` retroactively when ``--label`` landed so
+Phase H's rep2 outputs don't clobber them.
+
 CLI::
 
     python -m analysis.aggregate --raw data/raw/ --summary data/summaries/
+    python -m analysis.aggregate --raw data/raw/ --summary data/summaries/ --label rep2
 """
 
 from __future__ import annotations
@@ -254,6 +266,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Aggregate raw JSONL into per-RQ summary CSVs.")
     parser.add_argument("--raw", type=Path, default=Path("data/raw"))
     parser.add_argument("--summary", type=Path, default=Path("data/summaries"))
+    parser.add_argument(
+        "--label",
+        default="",
+        help=(
+            "Optional suffix for output CSV filenames, e.g. '--label rep2' "
+            "writes rq1_summary_rep2.csv. Default empty: writes rq1_summary.csv "
+            "(unsuffixed). Used to keep multiple replication runs side-by-side."
+        ),
+    )
     args = parser.parse_args(argv)
 
     args.summary.mkdir(parents=True, exist_ok=True)
@@ -277,8 +298,9 @@ def main(argv: list[str] | None = None) -> int:
         "rq4_summary": aggregate_rq4(all_records),
         "experiment_log": aggregate_experiment_log(jsonl_paths, file_records),
     }
+    suffix = f"_{args.label}" if args.label else ""
     for name, df in summaries.items():
-        out_path = args.summary / f"{name}.csv"
+        out_path = args.summary / f"{name}{suffix}.csv"
         df.to_csv(out_path, index=False)
         print(f"  wrote {out_path} ({len(df)} rows)")
     return 0

@@ -238,3 +238,50 @@ def test_main_end_to_end_writes_csvs(tmp_path: Path) -> None:
     # RQ1 should have a row; the others may be empty but the file must exist.
     rq1_csv = (summary / "rq1_summary.csv").read_text()
     assert "l3_lpm" in rq1_csv
+
+
+def test_main_label_flag_appends_suffix(tmp_path: Path) -> None:
+    """``--label rep2`` writes ``rq1_summary_rep2.csv`` etc."""
+    raw = tmp_path / "raw"
+    summary = tmp_path / "summary"
+    raw.mkdir()
+    (raw / "test.jsonl").write_text(json.dumps(_rq1_record("l3_lpm", 256, 1, 100.0)) + "\n")
+    rc = main(["--raw", str(raw), "--summary", str(summary), "--label", "rep2"])
+    assert rc == 0
+    for name in ("rq1_summary", "rq2_summary", "rq3_summary", "rq4_summary", "experiment_log"):
+        assert (summary / f"{name}_rep2.csv").is_file(), f"missing {name}_rep2.csv"
+        # Unsuffixed name must NOT exist when --label is set.
+        assert not (summary / f"{name}.csv").is_file(), f"unsuffixed {name}.csv leaked"
+
+
+def test_main_label_default_writes_unsuffixed(tmp_path: Path) -> None:
+    """No ``--label`` arg → unsuffixed names (back-compat with pre-Phase-H)."""
+    raw = tmp_path / "raw"
+    summary = tmp_path / "summary"
+    raw.mkdir()
+    (raw / "test.jsonl").write_text(json.dumps(_rq1_record("l3_lpm", 256, 1, 100.0)) + "\n")
+    rc = main(["--raw", str(raw), "--summary", str(summary)])
+    assert rc == 0
+    assert (summary / "rq1_summary.csv").is_file()
+    assert not (summary / "rq1_summary_.csv").is_file()
+    assert not (summary / "rq1_summary_rep2.csv").is_file()
+
+
+def test_main_label_preserves_aggregation_results(tmp_path: Path) -> None:
+    """Running with --label and without should produce identical content,
+    only the filename differs. Aggregation logic must be label-agnostic."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    summary_a = tmp_path / "a"
+    summary_b = tmp_path / "b"
+    (raw / "test.jsonl").write_text(
+        json.dumps(_rq1_record("l3_lpm", 256, 1, 100.0))
+        + "\n"
+        + json.dumps(_rq1_record("l3_lpm", 256, 25, 90.0))
+        + "\n"
+    )
+    main(["--raw", str(raw), "--summary", str(summary_a)])
+    main(["--raw", str(raw), "--summary", str(summary_b), "--label", "rep2"])
+    plain = (summary_a / "rq1_summary.csv").read_text()
+    labeled = (summary_b / "rq1_summary_rep2.csv").read_text()
+    assert plain == labeled
