@@ -120,20 +120,30 @@ def fig_cross_phase_methodology(out_dir: Path) -> None:
 def fig_cross_day_reproducibility_heatmap(out_dir: Path, divergence_report: pd.DataFrame) -> None:
     """Per-RQ × per-config band heatmap."""
     rq_order = ["rq1", "rq2", "rq3", "rq4"]
-    # Build a long array: rows = RQ, cols = config index within RQ, val = band
-    # 0 = within 5%, 1 = within 10%, 2 = within 20%, 3 = flagged, NaN = no data.
+    # Each RQ's divergence row populates a different ``delta_pct_*``
+    # column (rq1/rq3 use _us, rq2 uses _s, rq4 uses _value). The
+    # concat-joined report DataFrame has all three columns with NaNs
+    # where the row's RQ doesn't match, so we have to pick the right
+    # one per RQ rather than the first that happens to exist globally.
+    rq_to_col = {
+        "rq1": "delta_pct_us",
+        "rq2": "delta_pct_s",
+        "rq3": "delta_pct_us",
+        "rq4": "delta_pct_value",
+    }
     max_configs = 0
     per_rq = {}
     for rq in rq_order:
         sub = divergence_report[divergence_report["rq"] == rq].copy()
-        # find delta_pct column for this RQ
-        dp_cols = [c for c in sub.columns if c.startswith("delta_pct_")]
-        if not dp_cols:
+        col = rq_to_col[rq]
+        if col not in sub.columns:
             per_rq[rq] = np.asarray([])
             continue
-        col = dp_cols[0]
         sub = sub[sub[col].notna()].copy()
         abs_pct = sub[col].abs().to_numpy()
+        # Sort within-RQ by |Δ%| so the gradient reads left-to-right.
+        order = np.argsort(abs_pct)
+        abs_pct = abs_pct[order]
         bands = np.where(
             abs_pct <= 5,
             0,
