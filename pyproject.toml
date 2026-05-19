@@ -26,6 +26,7 @@ dependencies = [
   "pandas",
   "pyyaml",
   "scapy>=2.5",
+  "matplotlib>=3.7",
 ]
 
 [project.optional-dependencies]
@@ -48,6 +49,14 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Plot labels intentionally use Unicode '×' / '−' for paper-quality
+# rendering; ruff's ambiguous-character lints would force ASCII fallbacks.
+"analysis/plots.py" = ["RUF001", "RUF002", "RUF003"]
+"analysis/tables.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_plots.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_tables.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
