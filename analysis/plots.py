@@ -266,7 +266,7 @@ def fig_rq1_cold_warm_regime(out_dir: Path, rq1: pd.DataFrame) -> None:
     ax.set_xticks(range(len(values)))
     ax.set_xticklabels(labels, fontsize=10)
     ax.set_ylabel("Median switch-transit latency (μs)")
-    ax.set_title("RQ1 §5.2: cold-idle regime is 4-5× higher than the warm baseline")
+    ax.set_title("RQ1: cold-idle regime is 4-5× higher than the warm baseline")
     for bar, v in zip(bars, values, strict=True):
         ax.annotate(
             f"{v:.0f}",
@@ -482,7 +482,7 @@ def fig_rq3_drift_envelope(out_dir: Path, rq3_rep1: pd.DataFrame, rq3_rep2: pd.D
     axes[1].set_yscale("log")
 
     fig.suptitle(
-        "RQ3 §7: drift mean shifts wildly across reps; within-run std stays in the same band"
+        "RQ3: drift mean shifts wildly across reps; within-run std stays in the same band"
     )
     _save(fig, out_dir, "fig_rq3_drift_envelope")
 
