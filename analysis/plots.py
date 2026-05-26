@@ -324,9 +324,14 @@ def _build_rq2_ratio_grid(rq2: pd.DataFrame, op: str) -> tuple[np.ndarray, list[
 
 
 def fig_rq2_async_vs_sync_speedup(out_dir: Path, rq2: pd.DataFrame) -> None:
-    """Two-panel heatmap: sync/async ratio for insert (top), read (bottom)."""
-    fig, axes = plt.subplots(2, 1, figsize=(8, 6.5))
-    for ax, op in zip(axes, ("insert", "read"), strict=True):
+    """Two-panel heatmap: sync/async ratio for insert (top), read (bottom).
+
+    Uses ``constrained_layout`` so the top panel's x-axis machinery cannot
+    collide with the bottom panel's title; the top panel also drops its
+    own xlabel (the bottom panel's xlabel covers both since K is shared).
+    """
+    fig, axes = plt.subplots(2, 1, figsize=(8, 7.5), constrained_layout=True)
+    for idx, (ax, op) in enumerate(zip(axes, ("insert", "read"), strict=True)):
         grid, Ns, Ks = _build_rq2_ratio_grid(rq2, op)
         # diverging colormap centered at 1.0
         vmax = max(2.0, float(np.nanmax(grid)) if np.any(~np.isnan(grid)) else 2.0)
@@ -336,7 +341,10 @@ def fig_rq2_async_vs_sync_speedup(out_dir: Path, rq2: pd.DataFrame) -> None:
         ax.set_xticklabels([str(k) for k in Ks])
         ax.set_yticks(range(len(Ns)))
         ax.set_yticklabels([f"N={n}" for n in Ns])
-        ax.set_xlabel("K (entries per switch)")
+        # Only the bottom panel carries the shared xlabel; the top panel
+        # still shows tick labels for context.
+        if idx == len(axes) - 1:
+            ax.set_xlabel("K (entries per switch)")
         ax.set_title(f"{op.upper()}: sync / async median ratio (>1 = async wins)")
         for i in range(grid.shape[0]):
             for j in range(grid.shape[1]):
