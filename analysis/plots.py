@@ -434,19 +434,25 @@ def fig_rq2_cross_day_reproducibility(
     ax.set_xticklabels(labels)
     ax.set_ylabel("Median wall-clock (s)")
     ax.set_title("RQ2 cross-day reproducibility at N=8, K=1000")
-    ax.legend()
-    # Annotate async-insert speedup invariance.
+    # Leave headroom for the annotation box and legend so neither
+    # overlaps the tall insert bars.
+    ymax = max(*rep1_vals, *rep2_vals) if rep1_vals else 1.0
+    ax.set_ylim(top=ymax * 1.3)
+    ax.legend(loc="upper center")
+    # Annotate async-insert speedup invariance. The two read bars on
+    # the right are ~10x shorter than the insert bars on the left, so
+    # the top-right corner is the only empty quadrant.
     if len(rep1_vals) >= 2:
         spd_rep1 = rep1_vals[0] / rep1_vals[1]
         spd_rep2 = rep2_vals[0] / rep2_vals[1]
         ax.text(
-            0.02,
+            0.98,
             0.95,
             f"async-insert speedup\n  rep1: {spd_rep1:.2f}×\n  rep2: {spd_rep2:.2f}×\n  Δ = "
             f"{100 * (spd_rep2 - spd_rep1) / spd_rep1:+.1f}%",
             transform=ax.transAxes,
             va="top",
-            ha="left",
+            ha="right",
             fontsize=10,
             bbox={"facecolor": "white", "edgecolor": "black", "boxstyle": "round,pad=0.4"},
         )
