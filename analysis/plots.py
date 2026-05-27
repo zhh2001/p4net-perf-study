@@ -607,12 +607,19 @@ def fig_rq4_pipeline_overhead(out_dir: Path, rq4: pd.DataFrame) -> None:
     for prog in progs:
         row = df[df["p4_program"] == prog]
         means.append(float(row["mean"].iloc[0]) if not row.empty else np.nan)
-    fig, ax = plt.subplots(figsize=(7, 4.2))
+    fig, ax = plt.subplots(figsize=(7, 4.5))
     bars = ax.bar(
         progs, means, color=[PROGRAM_COLORS[p] for p in progs], edgecolor="black", linewidth=0.5
     )
     ax.set_ylabel("Aggregate BMv2 CPU (%)")
     ax.set_title("RQ4: pipeline-extension CPU overhead at N=4, 1 Mbps")
+    # All three bars sit at roughly the same height, so neither corner is
+    # "empty" by default. Add explicit headroom above the bars so the
+    # annotation box clears the per-bar value labels.
+    finite_means = [m for m in means if not np.isnan(m)]
+    if finite_means:
+        ymax = max(finite_means)
+        ax.set_ylim(top=ymax * 1.45)
     for bar, v in zip(bars, means, strict=True):
         if np.isnan(v):
             continue
@@ -627,7 +634,7 @@ def fig_rq4_pipeline_overhead(out_dir: Path, rq4: pd.DataFrame) -> None:
     if len(means) == 3 and not np.isnan(means[0]):
         ax.text(
             0.02,
-            0.95,
+            0.97,
             f"l3_lpm_acl Δ = {means[1] - means[0]:+.2f}%\n"
             f"l3_lpm_int Δ = {means[2] - means[0]:+.2f}%",
             transform=ax.transAxes,
