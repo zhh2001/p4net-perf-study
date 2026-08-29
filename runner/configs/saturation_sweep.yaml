@@ -1,27 +1,42 @@
-# BMv2 saturation point diagnostic.
+# Reviewer 1, Concern 3: full single-switch operating-load calibration.
 #
-# Runs once before the RQ1 measurement matrix to pick background-load
-# values BMv2 can actually carry on this rig. Output goes to
-# data/raw/saturation_sweep_*.jsonl; analysis picks R_max as the
-# highest rate at which both probe-loss and iperf3-received-bytes
-# stay above 0.95 (i.e. loss < 5% and arrival >= 95% of nominal).
-#
-# Estimated wall-clock: 5 rates × 60s duration + cooldown + network
-# bring-up ≈ 7 minutes.
+# The rule below is a study-specific operational heuristic, not a general
+# BMv2 limit. It is fixed before this replacement sweep is run. Each
+# repetition passes only when both probe delivery and receiver throughput
+# relative to the nominal offered rate are at least 95%. A rate qualifies
+# when at least 3 of 5 repetitions pass jointly. The same rule is evaluated
+# at 1%, 5%, and 10% probe-loss cutoffs for sensitivity analysis.
 
 campaign:
-  name: saturation_sweep
+  name: saturation_sweep_c3
   seed: 42
   cooldown_seconds: 15
-  warmup_seconds: 0
+  warmup_seconds: 30
+  shuffle_all_cells: true
+
+calibration_rule:
+  probe_delivery_min_pct: 95.0
+  achieved_to_nominal_min_pct: 95.0
+  minimum_passing_repetitions: 3
+  sensitivity_probe_loss_cutoffs_pct: [1.0, 5.0, 10.0]
+  interpolation_between_rates: false
 
 configs:
   - rq: 0
     workload_type: saturation_sweep
     p4_program: l3_lpm
+    topology: single_switch
+    n_switches: 1
     rates_mbps: [10, 25, 50, 75, 100]
-    n_probes_per_rate: 100
+    n_probes: 1000
     probe_interval_ms: 60.0
-    packet_size_bytes: 256
-    duration_s: 60
-    repetitions: 1
+    probe_packet_size_bytes: 256
+    measurement_seconds: 60
+    iperf_tail_seconds: 15
+    # Discard iperf3's first post-omit reporting bin, then use the common
+    # complete bins [1,61) for sender/receiver throughput and packet rate.
+    iperf_post_omit_guard_intervals: 1
+    # Fixed to the dynamic default reported by the local iperf3 3.16 smoke
+    # inside the evaluated p4net namespace; avoids the 1460-byte MSS warning.
+    iperf_udp_length_bytes: 1448
+    repetitions: 5

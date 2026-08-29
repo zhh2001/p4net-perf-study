@@ -1,0 +1,34 @@
+# Short integration-only check for the calibration instrumentation.
+# Outputs from this campaign are never used as paper data.
+
+campaign:
+  name: saturation_sweep_smoke
+  seed: 42
+  cooldown_seconds: 0
+  warmup_seconds: 1
+  shuffle_all_cells: true
+
+calibration_rule:
+  probe_delivery_min_pct: 95.0
+  achieved_to_nominal_min_pct: 95.0
+  minimum_passing_repetitions: 3
+  sensitivity_probe_loss_cutoffs_pct: [1.0, 5.0, 10.0]
+  interpolation_between_rates: false
+
+configs:
+  - rq: 0
+    workload_type: saturation_sweep
+    p4_program: l3_lpm
+    topology: single_switch
+    n_switches: 1
+    rates_mbps: [10]
+    n_probes: 20
+    probe_interval_ms: 50.0
+    probe_packet_size_bytes: 256
+    measurement_seconds: 3
+    iperf_tail_seconds: 3
+    iperf_post_omit_guard_intervals: 1
+    # Zero asks iperf3 to select its local dynamic default; the smoke records
+    # that value so the formal campaign can pin it explicitly.
+    iperf_udp_length_bytes: 0
+    repetitions: 1
