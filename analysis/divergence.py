@@ -86,7 +86,7 @@ def _add_delta_columns(
 
 
 def compare_rq1(rep1_path: Path, rep2_path: Path) -> pd.DataFrame:
-    """Per-config rep1-vs-rep2 deltas for switch_transit_us medians."""
+    """Per-config RQ1 ingress-to-egress-start deltas (legacy switch_transit_us field)."""
     r1 = pd.read_csv(rep1_path)
     r2 = pd.read_csv(rep2_path)
     keys = ["p4_program", "packet_size_bytes", "background_load_mbps", "cold_idle_reference"]

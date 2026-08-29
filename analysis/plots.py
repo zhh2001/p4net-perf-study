@@ -83,7 +83,7 @@ CROSS_PHASE_DATA = [
 
 
 def fig_cross_phase_methodology(out_dir: Path) -> None:
-    """RQ1 l3_lpm 256 B median latency across methodology iterations."""
+    """RQ1 l3_lpm BMv2 ingress-to-egress-start latency across methodology iterations."""
     labels = [f"Phase {p}\n{lbl}" for p, lbl, _, _ in CROSS_PHASE_DATA]
     values = [v for _, _, v, _ in CROSS_PHASE_DATA]
     colors = [c for _, _, _, c in CROSS_PHASE_DATA]
@@ -91,7 +91,7 @@ def fig_cross_phase_methodology(out_dir: Path) -> None:
     bars = ax.bar(range(len(values)), values, color=colors, edgecolor="black", linewidth=0.5)
     ax.set_xticks(range(len(values)))
     ax.set_xticklabels(labels, rotation=20, ha="right")
-    ax.set_ylabel("RQ1 l3_lpm 256 B median latency (μs)")
+    ax.set_ylabel("RQ1 l3_lpm 256 B median BMv2 ingress-to-egress-start latency (μs)")
     ax.set_title("Methodology evolution: cold-cache → warmup-then-stop → continuous carrier")
     for bar, v in zip(bars, values, strict=True):
         ax.annotate(
@@ -210,7 +210,7 @@ def fig_rq1_latency_by_load(out_dir: Path, rq1: pd.DataFrame) -> None:
         ax.set_xlabel("Continuous-carrier load (Mbps)")
         ax.set_title(f"{size} B packets")
         ax.set_ylim(bottom=0)
-    axes[0].set_ylabel("Median switch-transit latency (μs)")
+    axes[0].set_ylabel("Median BMv2 ingress-to-egress-start latency (μs)")
     axes[0].legend(loc="upper right", framealpha=0.95)
     fig.suptitle("RQ1: per-program median latency vs background load")
     _save(fig, out_dir, "fig_rq1_latency_by_load")
@@ -234,7 +234,7 @@ def fig_rq1_packet_size_independence(out_dir: Path, rq1: pd.DataFrame) -> None:
     ax.set_xticks(x)
     ax.set_xticklabels([str(s) for s in sizes])
     ax.set_xlabel("Packet size (B)")
-    ax.set_ylabel("Median switch-transit latency (μs)")
+    ax.set_ylabel("Median BMv2 ingress-to-egress-start latency (μs)")
     ax.set_title("RQ1: packet size has minimal effect at fixed (program, 1 Mbps)")
     ax.legend(loc="upper right", framealpha=0.95, ncol=2)
     ax.set_ylim(bottom=0)
@@ -265,7 +265,7 @@ def fig_rq1_cold_warm_regime(out_dir: Path, rq1: pd.DataFrame) -> None:
     bars = ax.bar(range(len(values)), values, color=colors, edgecolor="black", linewidth=0.5)
     ax.set_xticks(range(len(values)))
     ax.set_xticklabels(labels, fontsize=10)
-    ax.set_ylabel("Median switch-transit latency (μs)")
+    ax.set_ylabel("Median BMv2 ingress-to-egress-start latency (μs)")
     ax.set_title("RQ1: cold-idle regime is 4-5× higher than the warm baseline")
     for bar, v in zip(bars, values, strict=True):
         ax.annotate(
