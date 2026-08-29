@@ -10,7 +10,8 @@ Config dispatch — each block must carry a ``workload_type`` field:
 
 * ``latency_l2`` / ``latency_l3`` — RQ1 single-switch latency probes.
   L2 path uses Ethernet etherType 0x88B5; L3 path uses IPv4 protocol
-  0xFD. One JSONL record per received probe; ``metric == "switch_transit_us"``.
+  0xFD. One JSONL record per received probe; the legacy metric identifier
+  ``"switch_transit_us"`` stores the BMv2 ingress-to-egress-start interval.
 
 * ``control_plane`` — RQ2 multi-switch control-plane workload against
   a linear-N topology. One JSONL record per repetition;
@@ -71,6 +72,7 @@ programs netns and BMv2 needs CAP_NET_ADMIN::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -101,7 +103,7 @@ from workloads.control_plane_ops import (
 from workloads.int_collector import run_collection as run_int_collection
 from workloads.latency_probe import run_probe
 from workloads.resource_monitor import ResourceMonitor
-from workloads.saturation_sweep import find_sustainable_load
+from workloads.saturation_sweep import run_calibration_point
 
 RESOURCE_SAMPLE_INTERVAL_S = 0.1
 
@@ -150,6 +152,58 @@ def _p4_path(program_name: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(path)
     return path
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_execution_cells(
+    configs: list[dict[str, Any]],
+    *,
+    seed: int,
+    shuffle_all_cells: bool,
+) -> list[tuple[dict[str, Any], int]]:
+    """Expand configs into ``(config, repetition)`` execution cells.
+
+    Existing campaigns preserve their historical behaviour: configuration
+    blocks are shuffled, then repetitions of each block run consecutively.
+    Calibration can opt into shuffling all rate/repetition cells so temporal
+    drift is not confounded with one rate while retaining a fixed seed.
+    """
+    rng = random.Random(seed)
+    expanded_configs: list[dict[str, Any]] = []
+    for original in configs:
+        rates = original.get("rates_mbps")
+        if original.get("workload_type") == WORKLOAD_SATURATION_SWEEP and rates is not None:
+            for rate in rates:
+                cfg = dict(original)
+                cfg.pop("rates_mbps", None)
+                cfg["rate_mbps"] = int(rate)
+                cfg["background_load_mbps"] = int(rate)
+                expanded_configs.append(cfg)
+        else:
+            expanded_configs.append(dict(original))
+
+    if shuffle_all_cells:
+        cells = [
+            (cfg, repetition)
+            for cfg in expanded_configs
+            for repetition in range(int(cfg.get("repetitions", 1)))
+        ]
+        rng.shuffle(cells)
+        return cells
+
+    rng.shuffle(expanded_configs)
+    return [
+        (cfg, repetition)
+        for cfg in expanded_configs
+        for repetition in range(int(cfg.get("repetitions", 1)))
+    ]
 
 
 def _collect_bmv2_pids(net: Any) -> list[int]:
@@ -206,6 +260,49 @@ def make_continuous_carrier(
     return bg
 
 
+def _write_calibration_manifest(
+    *,
+    path: Path,
+    campaign: dict[str, Any],
+    config_path: Path,
+    run_id: str,
+    cells: list[tuple[dict[str, Any], int]],
+) -> None:
+    """Freeze the pre-run calibration rule, schedule, and code hashes."""
+    relevant_paths = [
+        config_path.resolve(),
+        Path(__file__).resolve(),
+        (REPO_ROOT / "workloads" / "saturation_sweep.py").resolve(),
+        (REPO_ROOT / "workloads" / "resource_monitor.py").resolve(),
+        (REPO_ROOT / "workloads" / "latency_probe.py").resolve(),
+        (REPO_ROOT / "p4" / "l3_lpm.p4").resolve(),
+    ]
+    manifest = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "created_utc": _utc_now_iso(),
+        "campaign": campaign,
+        "scheduled_cells": [
+            {
+                "schedule_index": index,
+                "rate_mbps": int(cfg["rate_mbps"]),
+                "repetition": int(repetition),
+            }
+            for index, (cfg, repetition) in enumerate(cells)
+        ],
+        "sha256": {
+            str(file_path.relative_to(REPO_ROOT))
+            if file_path.is_relative_to(REPO_ROOT)
+            else str(file_path): _sha256_file(file_path)
+            for file_path in relevant_paths
+        },
+    }
+    path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="p4net-perf-study measurement runner")
     parser.add_argument("--config", type=Path, required=True, help="YAML campaign config")
@@ -242,14 +339,30 @@ def main(argv: list[str] | None = None) -> int:
             "background_load_mbps. Ignoring the campaign-level value."
         )
     configs: list[dict[str, Any]] = list(campaign["configs"])
-
-    rng = random.Random(seed)
-    rng.shuffle(configs)
+    shuffle_all_cells = bool(campaign["campaign"].get("shuffle_all_cells", False))
+    cells = _build_execution_cells(
+        configs,
+        seed=seed,
+        shuffle_all_cells=shuffle_all_cells,
+    )
+    has_saturation = any(
+        cfg.get("workload_type") == WORKLOAD_SATURATION_SWEEP for cfg, _ in cells
+    )
 
     args.output.mkdir(parents=True, exist_ok=True)
     run_id = str(uuid.uuid4())
     jsonl_path = args.output / f"{name}_{run_id}.jsonl"
     sysinfo_path = args.output / f"system_info_{run_id}.json"
+    artifacts_root = args.output / f"{name}_{run_id}_artifacts"
+    if has_saturation:
+        artifacts_root.mkdir(parents=True, exist_ok=False)
+        _write_calibration_manifest(
+            path=artifacts_root / "manifest.json",
+            campaign=campaign,
+            config_path=args.config,
+            run_id=run_id,
+            cells=cells,
+        )
 
     info = capture_system_info()
     _verify_schema(info)
@@ -260,83 +373,103 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Run ID: %s", run_id)
     logger.info("System info: %s", sysinfo_path)
     logger.info("JSONL output: %s", jsonl_path)
-    logger.info("Campaign: %s — %d configs (post-shuffle order):", name, len(configs))
-    for i, c in enumerate(configs):
-        logger.info("  [%d] %s", i, c)
+    logger.info("Campaign: %s — %d execution cells:", name, len(cells))
+    for i, (cfg, repetition) in enumerate(cells):
+        logger.info(
+            "  [%d] rate=%s repetition=%d workload=%s",
+            i,
+            cfg.get("rate_mbps", cfg.get("background_load_mbps", "n/a")),
+            repetition,
+            cfg.get("workload_type"),
+        )
 
+    failure_count = 0
     with open(jsonl_path, "a", encoding="utf-8") as jsonl_fh:
-        for i, cfg in enumerate(configs):
+        for i, (base_cfg, rep) in enumerate(cells):
+            cfg = dict(base_cfg)
+            if cfg.get("workload_type") == WORKLOAD_SATURATION_SWEEP:
+                cfg["schedule_index"] = i
+                cfg["warmup_seconds"] = int(warmup_s)
             reps = int(cfg.get("repetitions", 1))
             wl = cfg.get("workload_type")
             if wl not in KNOWN_WORKLOAD_TYPES:
                 err_cfg = dict(cfg)
                 err_cfg.setdefault("workload_type", wl)
                 _write_failure(
-                    jsonl_fh, ValueError(f"unknown workload_type {wl!r}"), run_id, err_cfg, 0
+                    jsonl_fh, ValueError(f"unknown workload_type {wl!r}"), run_id, err_cfg, rep
                 )
+                failure_count += 1
                 continue
-            for rep in range(reps):
-                logger.info(
-                    "=== config %d/%d (rep %d/%d): %s ===",
-                    i + 1,
-                    len(configs),
-                    rep + 1,
-                    reps,
-                    cfg,
-                )
-                try:
-                    if wl in (WORKLOAD_LATENCY_L2, WORKLOAD_LATENCY_L3):
-                        samples, resource_samples = _run_latency(cfg, rep, warmup_s)
-                        _write_latency_samples(jsonl_fh, samples, run_id, cfg, rep)
-                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
-                        logger.info(
-                            "  → %d samples written, %d resource records",
-                            len(samples),
-                            len(resource_samples) * 4,
-                        )
-                    elif wl == WORKLOAD_CONTROL_PLANE:
-                        result, resource_samples = _run_control_plane(cfg, rep, warmup_s)
-                        _write_control_plane_result(jsonl_fh, result, run_id, cfg, rep)
-                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
-                        logger.info(
-                            "  → wall_clock=%.3fs success=%d failure=%d, %d resource records",
-                            result["total_wall_clock_s"],
-                            result["success_count"],
-                            result["failure_count"],
-                            len(resource_samples) * 4,
-                        )
-                    elif wl == WORKLOAD_SATURATION_SWEEP:
-                        sweep_results, resource_samples = _run_saturation_sweep(cfg, warmup_s)
-                        _write_saturation_sweep(jsonl_fh, sweep_results, run_id, cfg, rep)
-                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
-                        logger.info(
-                            "  → %d sweep records, %d resource records",
-                            len(sweep_results),
-                            len(resource_samples) * 4,
-                        )
-                    elif wl == WORKLOAD_RESOURCE_ONLY:
-                        _, resource_samples = _run_resource_only(cfg, warmup_s)
-                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
-                        logger.info("  → %d resource records", len(resource_samples) * 4)
-                    else:  # WORKLOAD_INT_MULTIHOP
-                        int_samples, resource_samples = _run_int_multihop(cfg, rep, warmup_s)
-                        _write_int_samples(jsonl_fh, int_samples, run_id, cfg, rep)
-                        _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
-                        logger.info(
-                            "  → %d INT samples, %d resource records",
-                            len(int_samples),
-                            len(resource_samples) * 4,
-                        )
-                except Exception as exc:
-                    logger.exception("Config failed: %s", exc)
-                    _write_failure(jsonl_fh, exc, run_id, cfg, rep)
-                finally:
-                    if cooldown_s > 0:
-                        logger.info("  cooldown %.1fs", cooldown_s)
-                        time.sleep(cooldown_s)
+            logger.info(
+                "=== cell %d/%d (rep %d/%d): %s ===",
+                i + 1,
+                len(cells),
+                rep + 1,
+                reps,
+                cfg,
+            )
+            try:
+                if wl in (WORKLOAD_LATENCY_L2, WORKLOAD_LATENCY_L3):
+                    samples, resource_samples = _run_latency(cfg, rep, warmup_s)
+                    _write_latency_samples(jsonl_fh, samples, run_id, cfg, rep)
+                    _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                    logger.info(
+                        "  → %d samples written, %d resource records",
+                        len(samples),
+                        len(resource_samples) * 4,
+                    )
+                elif wl == WORKLOAD_CONTROL_PLANE:
+                    result, resource_samples = _run_control_plane(cfg, rep, warmup_s)
+                    _write_control_plane_result(jsonl_fh, result, run_id, cfg, rep)
+                    _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                    logger.info(
+                        "  → wall_clock=%.3fs success=%d failure=%d, %d resource records",
+                        result["total_wall_clock_s"],
+                        result["success_count"],
+                        result["failure_count"],
+                        len(resource_samples) * 4,
+                    )
+                elif wl == WORKLOAD_SATURATION_SWEEP:
+                    artifact_dir = artifacts_root / (
+                        f"cell_{i:02d}_rate_{int(cfg['rate_mbps'])}_rep_{rep}"
+                    )
+                    result, resource_samples = _run_saturation_point(
+                        cfg,
+                        rep,
+                        warmup_s,
+                        artifact_dir,
+                    )
+                    _write_saturation_point(jsonl_fh, result, run_id, cfg, rep)
+                    _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                    logger.info(
+                        "  → %d probe records, 1 summary, %d resource records",
+                        len(result["probe_samples"]),
+                        len(resource_samples) * 4,
+                    )
+                elif wl == WORKLOAD_RESOURCE_ONLY:
+                    _, resource_samples = _run_resource_only(cfg, warmup_s)
+                    _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                    logger.info("  → %d resource records", len(resource_samples) * 4)
+                else:  # WORKLOAD_INT_MULTIHOP
+                    int_samples, resource_samples = _run_int_multihop(cfg, rep, warmup_s)
+                    _write_int_samples(jsonl_fh, int_samples, run_id, cfg, rep)
+                    _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
+                    logger.info(
+                        "  → %d INT samples, %d resource records",
+                        len(int_samples),
+                        len(resource_samples) * 4,
+                    )
+            except Exception as exc:
+                failure_count += 1
+                logger.exception("Config failed: %s", exc)
+                _write_failure(jsonl_fh, exc, run_id, cfg, rep)
+            finally:
+                if cooldown_s > 0:
+                    logger.info("  cooldown %.1fs", cooldown_s)
+                    time.sleep(cooldown_s)
 
-    logger.info("Campaign complete. JSONL: %s", jsonl_path)
-    return 0
+    logger.info("Campaign complete. JSONL: %s (failures=%d)", jsonl_path, failure_count)
+    return 1 if has_saturation and failure_count else 0
 
 
 # ---------------------------------------------------------------------------
@@ -458,22 +591,31 @@ def _run_latency(
 
 
 # ---------------------------------------------------------------------------
-# Saturation sweep diagnostic (pre-RQ1 calibration).
+# Single-point saturation calibration.
 # ---------------------------------------------------------------------------
 
 
-def _run_saturation_sweep(
+def _run_saturation_point(
     cfg: dict[str, Any],
+    repetition: int,
     warmup_s: float,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    artifact_dir: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from p4net import Network
 
     p4_path = _p4_path(str(cfg["p4_program"]))
-    rates_mbps = [int(r) for r in cfg["rates_mbps"]]
-    n_probes = int(cfg.get("n_probes_per_rate", 100))
+    rate_mbps = int(cfg["rate_mbps"])
+    n_probes = int(cfg.get("n_probes", 1000))
     probe_interval_ms = float(cfg.get("probe_interval_ms", 60.0))
-    packet_size_bytes = int(cfg.get("packet_size_bytes", 256))
-    duration_s = int(cfg.get("duration_s", 60))
+    probe_packet_size_bytes = int(cfg.get("probe_packet_size_bytes", 256))
+    measurement_seconds = int(cfg.get("measurement_seconds", 60))
+    iperf_tail_seconds = int(cfg.get("iperf_tail_seconds", 15))
+    iperf_post_omit_guard_intervals = int(
+        cfg.get("iperf_post_omit_guard_intervals", 1)
+    )
+    iperf_udp_length_bytes = int(cfg.get("iperf_udp_length_bytes", 1448))
+    if not float(warmup_s).is_integer():
+        raise ValueError("saturation warmup_seconds must be an integer")
 
     h1_ip = _bare_ip(H1_IP)
     h2_ip = _bare_ip(H2_IP)
@@ -513,34 +655,29 @@ def _run_saturation_sweep(
         disable_l4_offload(net, ["h1", "h2"])
         bmv2_pids = _collect_bmv2_pids(net)
         switch_ifaces = _collect_switch_ifaces(topo)
-
-        # The sweep iterates rates internally, each rate sets up its own
-        # BackgroundTraffic. No pre-sweep continuous carrier is needed —
-        # each rate's BG acts as the warm-up for its own per-rate window.
-        if warmup_s > 0:
-            logger.info("  warmup %.1fs (no carrier — sweep per-rate self-warms)", warmup_s)
-            time.sleep(warmup_s)
-
-        with ResourceMonitor(
-            sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
+        return run_calibration_point(
+            net=net,
+            sender_host="h1",
+            receiver_host="h2",
+            sender_ip=h1_ip,
+            receiver_ip=h2_ip,
+            sender_mac=h1_mac,
+            receiver_mac=h2_mac,
+            rate_mbps=rate_mbps,
+            n_probes=n_probes,
+            probe_interval_ms=probe_interval_ms,
+            probe_packet_size_bytes=probe_packet_size_bytes,
+            sequence_start=repetition * n_probes,
+            warmup_seconds=int(warmup_s),
+            measurement_seconds=measurement_seconds,
+            iperf_tail_seconds=iperf_tail_seconds,
+            iperf_post_omit_guard_intervals=iperf_post_omit_guard_intervals,
+            iperf_udp_length_bytes=iperf_udp_length_bytes,
+            artifact_dir=artifact_dir,
+            resource_sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
             target_processes=bmv2_pids,
             target_interfaces=switch_ifaces,
-        ) as mon:
-            primary = find_sustainable_load(
-                net=net,
-                sender_host="h1",
-                receiver_host="h2",
-                sender_ip=h1_ip,
-                receiver_ip=h2_ip,
-                sender_mac=h1_mac,
-                receiver_mac=h2_mac,
-                rates_mbps=rates_mbps,
-                n_probes_per_rate=n_probes,
-                probe_interval_ms=probe_interval_ms,
-                packet_size_bytes=packet_size_bytes,
-                duration_s=duration_s,
-            )
-        return primary, mon.samples()
+        )
     finally:
         net.stop()
 
@@ -900,45 +1037,66 @@ def _control_plane_config_payload(cfg: dict[str, Any], repetition: int) -> dict[
     }
 
 
-def _write_saturation_sweep(
+def _saturation_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
+    return {
+        "schema_version": 3,
+        "p4_program": str(cfg["p4_program"]),
+        "topology": str(cfg.get("topology", "single_switch")),
+        "n_switches": int(cfg.get("n_switches", 1)),
+        "rate_mbps": int(cfg["rate_mbps"]),
+        "background_load_mbps": int(cfg["background_load_mbps"]),
+        "n_probes": int(cfg.get("n_probes", 1000)),
+        "probe_interval_ms": float(cfg.get("probe_interval_ms", 60.0)),
+        "probe_packet_size_bytes": int(cfg.get("probe_packet_size_bytes", 256)),
+        "warmup_seconds": int(cfg.get("warmup_seconds", 30)),
+        "measurement_seconds": int(cfg.get("measurement_seconds", 60)),
+        "iperf_tail_seconds": int(cfg.get("iperf_tail_seconds", 15)),
+        "iperf_post_omit_guard_intervals": int(
+            cfg.get("iperf_post_omit_guard_intervals", 1)
+        ),
+        "iperf_udp_length_bytes": int(cfg.get("iperf_udp_length_bytes", 1448)),
+        "repetition": repetition,
+        "schedule_index": int(cfg.get("schedule_index", -1)),
+    }
+
+
+def _write_saturation_point(
     fh: Any,
-    sweep_results: list[dict[str, Any]],
+    result: dict[str, Any],
     run_id: str,
     cfg: dict[str, Any],
     repetition: int,
 ) -> None:
     rq = int(cfg["rq"])
-    for r in sweep_results:
-        config_payload = {
-            "p4_program": str(cfg["p4_program"]),
-            "rate_mbps": int(r["rate_mbps"]),
-            "n_probes": int(r["probes_sent"]),
-            "duration_s": int(cfg.get("duration_s", 60)),
-            "packet_size_bytes": int(cfg.get("packet_size_bytes", 256)),
-            "repetition": repetition,
-        }
+    config_payload = _saturation_config_payload(cfg, repetition)
+    summary_extras = dict(result)
+    probe_samples = list(summary_extras.pop("probe_samples"))
+    summary_record = {
+        "run_id": run_id,
+        "timestamp_utc": _utc_now_iso(),
+        "rq": rq,
+        "config": config_payload,
+        "metric": "saturation_probe_loss_pct",
+        "value": float(result["probe_loss_pct"]),
+        "extras": summary_extras,
+    }
+    fh.write(json.dumps(summary_record, allow_nan=False) + "\n")
+
+    for sample in probe_samples:
         record = {
             "run_id": run_id,
             "timestamp_utc": _utc_now_iso(),
             "rq": rq,
             "config": config_payload,
-            "metric": "saturation_probe_loss_pct",
-            "value": float(r["probe_loss_pct"]),
+            "metric": "saturation_ingress_to_egress_start_us",
+            "value": float(sample["switch_transit_us"]),
             "extras": {
-                "probes_received": int(r["probes_received"]),
-                "median_us": float(r["median_us"]) if r["median_us"] == r["median_us"] else None,
-                "p99_us": float(r["p99_us"]) if r["p99_us"] == r["p99_us"] else None,
-                "p99_9_us": float(r["p99_9_us"]) if r["p99_9_us"] == r["p99_9_us"] else None,
-                "iperf3_received_bytes_pct": (
-                    float(r["iperf3_received_bytes_pct"])
-                    if r["iperf3_received_bytes_pct"] == r["iperf3_received_bytes_pct"]
-                    else None
-                ),
-                "rx_delta_bytes": int(r["rx_delta_bytes"]),
-                "rx_window_seconds": float(r["rx_window_seconds"]),
+                "sequence": int(sample["sequence"]),
+                "ingress_ts_us": int(sample["ingress_ts_us"]),
+                "egress_ts_us": int(sample["egress_ts_us"]),
             },
         }
-        fh.write(json.dumps(record) + "\n")
+        fh.write(json.dumps(record, allow_nan=False) + "\n")
     fh.flush()
 
 
@@ -1046,8 +1204,10 @@ def _resource_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, 
         "topology": str(cfg.get("topology", "single_switch")),
         "n_switches": int(cfg.get("n_switches", 1)),
         "background_load_mbps": int(cfg.get("background_load_mbps", 0)),
+        "rate_mbps": int(cfg.get("rate_mbps", cfg.get("background_load_mbps", 0))),
         "source_workload_type": str(cfg.get("workload_type", "")),
         "repetition": repetition,
+        "schedule_index": int(cfg.get("schedule_index", -1)),
     }
 
 
