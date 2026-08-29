@@ -1,4 +1,4 @@
-/* IPv4 LPM forwarder + single-hop INT shim for RQ1 (INT-cost cell)
+/* IPv4 LPM forwarder + single-hop INT shim for RQ1 (instrumented-program cell)
  * and RQ4 (single-hop INT process cost).
  *
  * Wire format (probe path only, identified by IPv4 protocol 0xFD):
@@ -17,9 +17,10 @@
  * with zero captured samples. The new format preserves the
  * Ethernet+IPv4 outer envelope so generic IPv4 capture tools work
  * unchanged; the int_shim is appended after the instrument header and
- * the receiver simply ignores the extra bytes when it only needs
- * switch_transit_us. Background (non-probe) traffic still bypasses
- * shim insertion entirely.
+ * the receiver simply ignores the extra bytes when it only needs the
+ * instrument timestamps. The downstream JSONL schema retains the legacy
+ * field name switch_transit_us for their ingress-to-egress-start difference.
+ * Background (non-probe) traffic still bypasses shim insertion entirely.
  *
  * INT shim layout (13 bytes, big-endian on the wire):
  *
