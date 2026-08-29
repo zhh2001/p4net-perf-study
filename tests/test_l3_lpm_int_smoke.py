@@ -13,7 +13,8 @@ Two integration tests live here:
 
 * ``test_latency_probe_through_l3_lpm_int`` — Phase G regression. An
   L3 latency probe through l3_lpm_int returns non-empty samples with
-  ``switch_transit_us > 0``; this is the fix that lets the 9 previously
+  a positive BMv2 ingress-to-egress-start interval under the legacy
+  ``switch_transit_us`` key; this is the fix that lets the 9 previously
   missing l3_lpm_int RQ1 matrix cells produce measurable data.
 """
 
@@ -160,16 +161,17 @@ def test_iperf3_through_l3_lpm_int(tmp_path: Path) -> None:
 @pytest.mark.requires_bmv2
 def test_latency_probe_through_l3_lpm_int(tmp_path: Path) -> None:
     """An L3 probe through l3_lpm_int.p4 must return non-empty samples
-    with positive switch_transit_us.
+    with a positive BMv2 ingress-to-egress-start interval.
 
     The Phase G restructure keeps the outer Ethernet/IPv4 envelope
     intact (no etherType rewrite) and appends the int_shim after the
     instrument header. The receiver decodes the IPv4 frame normally;
     the additional shim bytes sit between instrument and the
     sequence + padding payload, which only affects the sequence-number
-    field's decoding — not the switch_transit_us calculation. So the
-    JSONL ``value`` column is correct; only ``extras.sequence`` is
-    garbled, which the aggregator does not use.
+    field's decoding — not the timestamp subtraction stored under the
+    legacy ``switch_transit_us`` key. So the JSONL ``value`` column is
+    correct; only ``extras.sequence`` is garbled, which the aggregator
+    does not use.
     """
     from p4net import Network
 
@@ -230,8 +232,7 @@ def test_latency_probe_through_l3_lpm_int(tmp_path: Path) -> None:
 
     assert len(samples) == 10, f"expected 10 samples, got {len(samples)}: {samples}"
     for s in samples:
-        # The shim adds a fixed ~µs of egress work; switch_transit_us
-        # must still be a positive number on the order of single-digit
-        # to low-double-digit μs.
+        # The metric ends before egress-control execution, so this test
+        # checks timestamp extraction and subtraction, not INT-shim cost.
         assert s["switch_transit_us"] > 0, f"non-positive transit: {s}"
         assert s["switch_transit_us"] < 100_000, f"transit absurdly high: {s}"

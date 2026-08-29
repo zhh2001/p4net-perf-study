@@ -233,7 +233,16 @@ def test_main_end_to_end_writes_csvs(tmp_path: Path) -> None:
     )
     rc = main(["--raw", str(raw), "--summary", str(summary)])
     assert rc == 0
-    for name in ("rq1_summary", "rq2_summary", "rq3_summary", "rq4_summary", "experiment_log"):
+    for name in (
+        "rq1_summary",
+        "rq2_summary",
+        "rq3_summary",
+        "rq4_summary",
+        "saturation_run_summary",
+        "saturation_summary",
+        "saturation_sensitivity",
+        "experiment_log",
+    ):
         assert (summary / f"{name}.csv").is_file(), f"missing {name}.csv"
     # RQ1 should have a row; the others may be empty but the file must exist.
     rq1_csv = (summary / "rq1_summary.csv").read_text()
@@ -248,7 +257,16 @@ def test_main_label_flag_appends_suffix(tmp_path: Path) -> None:
     (raw / "test.jsonl").write_text(json.dumps(_rq1_record("l3_lpm", 256, 1, 100.0)) + "\n")
     rc = main(["--raw", str(raw), "--summary", str(summary), "--label", "rep2"])
     assert rc == 0
-    for name in ("rq1_summary", "rq2_summary", "rq3_summary", "rq4_summary", "experiment_log"):
+    for name in (
+        "rq1_summary",
+        "rq2_summary",
+        "rq3_summary",
+        "rq4_summary",
+        "saturation_run_summary",
+        "saturation_summary",
+        "saturation_sensitivity",
+        "experiment_log",
+    ):
         assert (summary / f"{name}_rep2.csv").is_file(), f"missing {name}_rep2.csv"
         # Unsuffixed name must NOT exist when --label is set.
         assert not (summary / f"{name}.csv").is_file(), f"unsuffixed {name}.csv leaked"
