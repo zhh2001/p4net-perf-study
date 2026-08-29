@@ -8,6 +8,6 @@ lifecycle and the JSONL output.
 
 Modules:
 
-* ``latency_probe`` — RQ1 switch-transit probe (L3 only for now).
+* ``latency_probe`` — RQ1 BMv2 ingress-to-egress-start probe (L2 and L3).
 * ``background_traffic`` — iperf3-driven steady-state load.
 """

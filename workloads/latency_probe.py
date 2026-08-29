@@ -1,9 +1,10 @@
-"""Switch-transit latency probe for RQ1.
+"""BMv2 ingress-to-egress-start latency probe for RQ1.
 
 The probe is a custom-payload frame whose data plane fills a 12-byte
 ``instrument_t`` header with its ingress and egress BMv2 global
 timestamps; the receiver reads them directly off the wire and reports
-``egress_ts - ingress_ts`` as the switch-transit latency in microseconds.
+``egress_ts - ingress_ts`` in microseconds under the legacy result key
+``switch_transit_us``.
 Two wire formats are supported, selected by the ``probe_layer`` argument
 to :func:`run_probe`:
 
