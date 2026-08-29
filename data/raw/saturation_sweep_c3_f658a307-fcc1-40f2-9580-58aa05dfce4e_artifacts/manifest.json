@@ -1,0 +1,183 @@
+{
+  "campaign": {
+    "calibration_rule": {
+      "achieved_to_nominal_min_pct": 95.0,
+      "interpolation_between_rates": false,
+      "minimum_passing_repetitions": 3,
+      "probe_delivery_min_pct": 95.0,
+      "sensitivity_probe_loss_cutoffs_pct": [
+        1.0,
+        5.0,
+        10.0
+      ]
+    },
+    "campaign": {
+      "cooldown_seconds": 15,
+      "name": "saturation_sweep_c3",
+      "seed": 42,
+      "shuffle_all_cells": true,
+      "warmup_seconds": 30
+    },
+    "configs": [
+      {
+        "iperf_tail_seconds": 15,
+        "iperf_udp_length_bytes": 1448,
+        "measurement_seconds": 60,
+        "n_probes": 1000,
+        "n_switches": 1,
+        "p4_program": "l3_lpm",
+        "probe_interval_ms": 60.0,
+        "probe_packet_size_bytes": 256,
+        "rates_mbps": [
+          10,
+          25,
+          50,
+          75,
+          100
+        ],
+        "repetitions": 5,
+        "rq": 0,
+        "topology": "single_switch",
+        "workload_type": "saturation_sweep"
+      }
+    ]
+  },
+  "created_utc": "2026-08-28T08:42:44Z",
+  "run_id": "f658a307-fcc1-40f2-9580-58aa05dfce4e",
+  "scheduled_cells": [
+    {
+      "rate_mbps": 75,
+      "repetition": 1,
+      "schedule_index": 0
+    },
+    {
+      "rate_mbps": 50,
+      "repetition": 2,
+      "schedule_index": 1
+    },
+    {
+      "rate_mbps": 25,
+      "repetition": 4,
+      "schedule_index": 2
+    },
+    {
+      "rate_mbps": 75,
+      "repetition": 4,
+      "schedule_index": 3
+    },
+    {
+      "rate_mbps": 75,
+      "repetition": 3,
+      "schedule_index": 4
+    },
+    {
+      "rate_mbps": 25,
+      "repetition": 1,
+      "schedule_index": 5
+    },
+    {
+      "rate_mbps": 25,
+      "repetition": 0,
+      "schedule_index": 6
+    },
+    {
+      "rate_mbps": 50,
+      "repetition": 0,
+      "schedule_index": 7
+    },
+    {
+      "rate_mbps": 75,
+      "repetition": 0,
+      "schedule_index": 8
+    },
+    {
+      "rate_mbps": 100,
+      "repetition": 1,
+      "schedule_index": 9
+    },
+    {
+      "rate_mbps": 50,
+      "repetition": 1,
+      "schedule_index": 10
+    },
+    {
+      "rate_mbps": 75,
+      "repetition": 2,
+      "schedule_index": 11
+    },
+    {
+      "rate_mbps": 10,
+      "repetition": 1,
+      "schedule_index": 12
+    },
+    {
+      "rate_mbps": 50,
+      "repetition": 4,
+      "schedule_index": 13
+    },
+    {
+      "rate_mbps": 100,
+      "repetition": 2,
+      "schedule_index": 14
+    },
+    {
+      "rate_mbps": 50,
+      "repetition": 3,
+      "schedule_index": 15
+    },
+    {
+      "rate_mbps": 10,
+      "repetition": 2,
+      "schedule_index": 16
+    },
+    {
+      "rate_mbps": 100,
+      "repetition": 3,
+      "schedule_index": 17
+    },
+    {
+      "rate_mbps": 10,
+      "repetition": 4,
+      "schedule_index": 18
+    },
+    {
+      "rate_mbps": 100,
+      "repetition": 4,
+      "schedule_index": 19
+    },
+    {
+      "rate_mbps": 25,
+      "repetition": 2,
+      "schedule_index": 20
+    },
+    {
+      "rate_mbps": 25,
+      "repetition": 3,
+      "schedule_index": 21
+    },
+    {
+      "rate_mbps": 10,
+      "repetition": 0,
+      "schedule_index": 22
+    },
+    {
+      "rate_mbps": 10,
+      "repetition": 3,
+      "schedule_index": 23
+    },
+    {
+      "rate_mbps": 100,
+      "repetition": 0,
+      "schedule_index": 24
+    }
+  ],
+  "schema_version": 1,
+  "sha256": {
+    "p4/l3_lpm.p4": "951fb74065643f261304f41d1a354049e3d9a5dd8734fc7446e7736cccf2ec5f",
+    "runner/configs/saturation_sweep.yaml": "04cb91f406cd2c7d97df7769f0c25967e61df00d7daa1a2039ac071afa25631e",
+    "runner/runner.py": "823a95bf50fba5a4d5240ae18c63b735dd4949617396c26adf2824fddb9f58c8",
+    "workloads/latency_probe.py": "3a976439fad7dc97cece24dc971c549d916130c7582004e555d361c797ff42bc",
+    "workloads/resource_monitor.py": "893e08f5a86c00fba45ab9e28fc90663214d38f99c043c73fa1cf75add43b07e",
+    "workloads/saturation_sweep.py": "601e93e77fc8ed4f3323e751d2b1f25a0f3f781177066837fbeaea1addf83c76"
+  }
+}

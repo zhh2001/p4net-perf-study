@@ -1,0 +1,76 @@
+{
+  "created_utc": "2026-08-28T03:04:42.005725+00:00",
+  "configuration": {
+    "p4_program": "l3_lpm",
+    "topology": "single_switch",
+    "packet_size_bytes": 256,
+    "carrier_mbps": 1,
+    "warmup_seconds": 30.0,
+    "n_probes": 1000,
+    "probe_interval_ms": 60.0,
+    "sequence_start": 0
+  },
+  "software": {
+    "bmv2": "1.15.0-2bdd0b7b",
+    "p4c": "p4c 1.2.5.10 (SHA: 8b6de3c57 BUILD: Release)",
+    "p4net": "1.7.0",
+    "dumpcap": "Dumpcap (Wireshark) 4.2.2 (Git v4.2.2 packaged as 4.2.2-1.1build3).",
+    "tshark": "TShark (Wireshark) 4.2.2 (Git v4.2.2 packaged as 4.2.2-1.1build3)."
+  },
+  "measurement_points": {
+    "internal_ingress": "BMv2 ingress_global_timestamp",
+    "internal_egress": "BMv2 egress_global_timestamp at egress dequeue",
+    "external_ingress": "s1-eth1",
+    "external_egress": "s1-eth2",
+    "capture_clock": "one dumpcap process for both switch-side veth interfaces"
+  },
+  "counts": {
+    "expected": 1000,
+    "internal": 1000,
+    "external_ingress": 1000,
+    "external_egress": 1000,
+    "matched": 1000,
+    "missing_internal": [],
+    "missing_external_ingress": [],
+    "missing_external_egress": []
+  },
+  "statistics_us": {
+    "internal": {
+      "n": 1000,
+      "min": 68.0,
+      "q1": 119.75,
+      "median": 137.0,
+      "q3": 169.0,
+      "iqr": 49.25,
+      "p99": 335.06999999999994,
+      "max": 591.0
+    },
+    "external": {
+      "n": 1000,
+      "min": 165.712,
+      "q1": 232.9425,
+      "median": 265.03700000000003,
+      "q3": 320.3865,
+      "iqr": 87.44400000000002,
+      "p99": 640.4069599999996,
+      "max": 1503.156
+    },
+    "external_minus_internal": {
+      "n": 1000,
+      "min": 71.71199999999999,
+      "q1": 108.56125,
+      "median": 124.73849999999999,
+      "q3": 150.97575,
+      "iqr": 42.414500000000004,
+      "p99": 330.44620999999995,
+      "max": 1329.156
+    }
+  },
+  "association": {
+    "spearman_rank_correlation": 0.9058517852665433
+  },
+  "files": {
+    "capture": "probe_capture.pcapng",
+    "paired_samples": "paired_samples.csv"
+  }
+}

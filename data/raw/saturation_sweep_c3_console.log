@@ -1,0 +1,274 @@
+
+2026-08-28 16:42:44,207 [INFO] Run ID: f658a307-fcc1-40f2-9580-58aa05dfce4e
+2026-08-28 16:42:44,207 [INFO] System info: data/raw/system_info_f658a307-fcc1-40f2-9580-58aa05dfce4e.json
+2026-08-28 16:42:44,207 [INFO] JSONL output: data/raw/saturation_sweep_c3_f658a307-fcc1-40f2-9580-58aa05dfce4e.jsonl
+2026-08-28 16:42:44,208 [INFO] Campaign: saturation_sweep_c3 — 25 execution cells:
+2026-08-28 16:42:44,208 [INFO]   [0] rate=75 repetition=1 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [1] rate=50 repetition=2 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [2] rate=25 repetition=4 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [3] rate=75 repetition=4 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [4] rate=75 repetition=3 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [5] rate=25 repetition=1 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [6] rate=25 repetition=0 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [7] rate=50 repetition=0 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [8] rate=75 repetition=0 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [9] rate=100 repetition=1 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [10] rate=50 repetition=1 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [11] rate=75 repetition=2 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [12] rate=10 repetition=1 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [13] rate=50 repetition=4 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [14] rate=100 repetition=2 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [15] rate=50 repetition=3 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [16] rate=10 repetition=2 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [17] rate=100 repetition=3 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [18] rate=10 repetition=4 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [19] rate=100 repetition=4 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [20] rate=25 repetition=2 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [21] rate=25 repetition=3 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [22] rate=10 repetition=0 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [23] rate=10 repetition=3 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO]   [24] rate=100 repetition=0 workload=saturation_sweep
+2026-08-28 16:42:44,208 [INFO] === cell 1/25 (rep 2/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 75, 'background_load_mbps': 75, 'schedule_index': 0, 'warmup_seconds': 30} ===
+2026-08-28 16:42:44,208 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:42:44,448 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:42:44,459 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:42:44,459 [INFO] Network.start: ready
+2026-08-28 16:44:29,802 [INFO] calibration rate=75 Mbps: offered=75.000 achieved=74.999 probe_loss=0.10% median=113.0 us p99=430.1 us
+2026-08-28 16:44:29,803 [INFO] Network.stop: tearing down
+2026-08-28 16:44:30,009 [INFO]   → 999 probe records, 1 summary, 2396 resource records
+2026-08-28 16:44:30,009 [INFO]   cooldown 15.0s
+2026-08-28 16:44:45,009 [INFO] === cell 2/25 (rep 3/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 50, 'background_load_mbps': 50, 'schedule_index': 1, 'warmup_seconds': 30} ===
+2026-08-28 16:44:45,010 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:44:45,228 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:44:45,236 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:44:45,236 [INFO] Network.start: ready
+2026-08-28 16:46:30,573 [INFO] calibration rate=50 Mbps: offered=49.180 achieved=49.180 probe_loss=0.00% median=105.0 us p99=379.3 us
+2026-08-28 16:46:30,573 [INFO] Network.stop: tearing down
+2026-08-28 16:46:30,771 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 16:46:30,772 [INFO]   cooldown 15.0s
+2026-08-28 16:46:45,772 [INFO] === cell 3/25 (rep 5/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 25, 'background_load_mbps': 25, 'schedule_index': 2, 'warmup_seconds': 30} ===
+2026-08-28 16:46:45,772 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:46:46,019 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:46:46,027 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:46:46,027 [INFO] Network.start: ready
+2026-08-28 16:48:31,361 [INFO] calibration rate=25 Mbps: offered=24.590 achieved=24.590 probe_loss=0.00% median=103.0 us p99=217.0 us
+2026-08-28 16:48:31,361 [INFO] Network.stop: tearing down
+2026-08-28 16:48:31,557 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 16:48:31,557 [INFO]   cooldown 15.0s
+2026-08-28 16:48:46,557 [INFO] === cell 4/25 (rep 5/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 75, 'background_load_mbps': 75, 'schedule_index': 3, 'warmup_seconds': 30} ===
+2026-08-28 16:48:46,558 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:48:46,796 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:48:46,803 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:48:46,803 [INFO] Network.start: ready
+2026-08-28 16:50:32,156 [INFO] calibration rate=75 Mbps: offered=73.770 achieved=75.000 probe_loss=0.00% median=110.0 us p99=411.1 us
+2026-08-28 16:50:32,156 [INFO] Network.stop: tearing down
+2026-08-28 16:50:32,352 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 16:50:32,352 [INFO]   cooldown 15.0s
+2026-08-28 16:50:47,352 [INFO] === cell 5/25 (rep 4/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 75, 'background_load_mbps': 75, 'schedule_index': 4, 'warmup_seconds': 30} ===
+2026-08-28 16:50:47,353 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:50:47,591 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:50:47,598 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:50:47,598 [INFO] Network.start: ready
+2026-08-28 16:52:32,943 [INFO] calibration rate=75 Mbps: offered=73.770 achieved=74.995 probe_loss=0.20% median=115.0 us p99=522.4 us
+2026-08-28 16:52:32,943 [INFO] Network.stop: tearing down
+2026-08-28 16:52:33,141 [INFO]   → 998 probe records, 1 summary, 2396 resource records
+2026-08-28 16:52:33,141 [INFO]   cooldown 15.0s
+2026-08-28 16:52:48,141 [INFO] === cell 6/25 (rep 2/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 25, 'background_load_mbps': 25, 'schedule_index': 5, 'warmup_seconds': 30} ===
+2026-08-28 16:52:48,142 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:52:48,448 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:52:48,455 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:52:48,455 [INFO] Network.start: ready
+2026-08-28 16:54:33,784 [INFO] calibration rate=25 Mbps: offered=24.591 achieved=24.590 probe_loss=0.00% median=104.0 us p99=276.1 us
+2026-08-28 16:54:33,784 [INFO] Network.stop: tearing down
+2026-08-28 16:54:33,974 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 16:54:33,974 [INFO]   cooldown 15.0s
+2026-08-28 16:54:48,974 [INFO] === cell 7/25 (rep 1/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 25, 'background_load_mbps': 25, 'schedule_index': 6, 'warmup_seconds': 30} ===
+2026-08-28 16:54:48,975 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:54:49,207 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:54:49,214 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:54:49,214 [INFO] Network.start: ready
+2026-08-28 16:56:34,547 [INFO] calibration rate=25 Mbps: offered=25.000 achieved=24.590 probe_loss=0.00% median=102.0 us p99=266.0 us
+2026-08-28 16:56:34,547 [INFO] Network.stop: tearing down
+2026-08-28 16:56:34,739 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 16:56:34,739 [INFO]   cooldown 15.0s
+2026-08-28 16:56:49,740 [INFO] === cell 8/25 (rep 1/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 50, 'background_load_mbps': 50, 'schedule_index': 7, 'warmup_seconds': 30} ===
+2026-08-28 16:56:49,740 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:56:49,983 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:56:49,989 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:56:49,990 [INFO] Network.start: ready
+2026-08-28 16:58:35,316 [INFO] calibration rate=50 Mbps: offered=49.181 achieved=50.000 probe_loss=0.00% median=101.0 us p99=282.2 us
+2026-08-28 16:58:35,316 [INFO] Network.stop: tearing down
+2026-08-28 16:58:35,468 [INFO] Network.stop: tearing down
+2026-08-28 16:58:35,468 [WARNING] veth destroy VethPair('h1-eth0', 's1-eth1'): LinkError('veth pair has not been created (or already destroyed)')
+2026-08-28 16:58:35,511 [WARNING] veth destroy VethPair('h2-eth0', 's1-eth2'): LinkError("interface 'h2-eth0' not found in this namespace")
+2026-08-28 16:58:35,535 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 16:58:35,535 [INFO]   cooldown 15.0s
+2026-08-28 16:58:50,536 [INFO] === cell 9/25 (rep 1/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 75, 'background_load_mbps': 75, 'schedule_index': 8, 'warmup_seconds': 30} ===
+2026-08-28 16:58:50,536 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 16:58:50,888 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 16:58:50,896 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 16:58:50,896 [INFO] Network.start: ready
+2026-08-28 17:00:36,252 [INFO] calibration rate=75 Mbps: offered=73.771 achieved=73.770 probe_loss=0.10% median=108.0 us p99=392.2 us
+2026-08-28 17:00:36,252 [INFO] Network.stop: tearing down
+2026-08-28 17:00:36,370 [INFO] Network.stop: tearing down
+2026-08-28 17:00:36,400 [INFO] Network.stop: tearing down
+2026-08-28 17:00:36,400 [WARNING] veth destroy VethPair('h1-eth0', 's1-eth1'): LinkError('veth pair has not been created (or already destroyed)')
+2026-08-28 17:00:36,440 [WARNING] veth destroy VethPair('h2-eth0', 's1-eth2'): LinkError("interface 'h2-eth0' not found in this namespace")
+2026-08-28 17:00:36,442 [WARNING] veth destroy VethPair('h1-eth0', 's1-eth1'): LinkError("interface 'h1-eth0' not found in this namespace")
+2026-08-28 17:00:36,446 [WARNING] veth destroy VethPair('h2-eth0', 's1-eth2'): LinkError("interface 'h2-eth0' not found in this namespace")
+2026-08-28 17:00:36,468 [INFO]   → 999 probe records, 1 summary, 2396 resource records
+2026-08-28 17:00:36,468 [INFO]   cooldown 15.0s
+2026-08-28 17:00:51,469 [INFO] === cell 10/25 (rep 2/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 100, 'background_load_mbps': 100, 'schedule_index': 9, 'warmup_seconds': 30} ===
+2026-08-28 17:00:51,469 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:00:51,687 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:00:51,694 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:00:51,695 [INFO] Network.start: ready
+2026-08-28 17:02:37,019 [INFO] calibration rate=100 Mbps: offered=100.000 achieved=99.989 probe_loss=27.10% median=116.0 us p99=506.7 us
+2026-08-28 17:02:37,019 [INFO] Network.stop: tearing down
+2026-08-28 17:02:37,137 [INFO] Network.stop: tearing down
+2026-08-28 17:02:37,204 [WARNING] veth destroy VethPair('h1-eth0', 's1-eth1'): LinkError("interface 'h1-eth0' not found in this namespace")
+2026-08-28 17:02:37,208 [WARNING] veth destroy VethPair('h2-eth0', 's1-eth2'): LinkError("interface 'h2-eth0' not found in this namespace")
+2026-08-28 17:02:37,229 [INFO]   → 729 probe records, 1 summary, 2396 resource records
+2026-08-28 17:02:37,229 [INFO]   cooldown 15.0s
+2026-08-28 17:02:52,230 [INFO] === cell 11/25 (rep 2/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 50, 'background_load_mbps': 50, 'schedule_index': 10, 'warmup_seconds': 30} ===
+2026-08-28 17:02:52,230 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:02:52,485 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:02:52,493 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:02:52,493 [INFO] Network.start: ready
+2026-08-28 17:04:37,864 [INFO] calibration rate=50 Mbps: offered=49.180 achieved=49.180 probe_loss=0.00% median=101.0 us p99=292.0 us
+2026-08-28 17:04:37,864 [INFO] Network.stop: tearing down
+2026-08-28 17:04:38,072 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:04:38,072 [INFO]   cooldown 15.0s
+2026-08-28 17:04:53,072 [INFO] === cell 12/25 (rep 3/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 75, 'background_load_mbps': 75, 'schedule_index': 11, 'warmup_seconds': 30} ===
+2026-08-28 17:04:53,073 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:04:53,307 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:04:53,314 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:04:53,314 [INFO] Network.start: ready
+2026-08-28 17:06:38,680 [INFO] calibration rate=75 Mbps: offered=75.001 achieved=73.770 probe_loss=0.10% median=109.0 us p99=359.4 us
+2026-08-28 17:06:38,680 [INFO] Network.stop: tearing down
+2026-08-28 17:06:38,882 [INFO]   → 999 probe records, 1 summary, 2396 resource records
+2026-08-28 17:06:38,882 [INFO]   cooldown 15.0s
+2026-08-28 17:06:53,883 [INFO] === cell 13/25 (rep 2/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 10, 'background_load_mbps': 10, 'schedule_index': 12, 'warmup_seconds': 30} ===
+2026-08-28 17:06:53,884 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:06:54,140 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:06:54,149 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:06:54,149 [INFO] Network.start: ready
+2026-08-28 17:08:39,481 [INFO] calibration rate=10 Mbps: offered=9.836 achieved=9.836 probe_loss=0.00% median=104.0 us p99=234.0 us
+2026-08-28 17:08:39,481 [INFO] Network.stop: tearing down
+2026-08-28 17:08:39,619 [INFO] Network.stop: tearing down
+2026-08-28 17:08:39,620 [WARNING] veth destroy VethPair('h1-eth0', 's1-eth1'): LinkError('veth pair has not been created (or already destroyed)')
+2026-08-28 17:08:39,652 [WARNING] veth destroy VethPair('h2-eth0', 's1-eth2'): LinkError("interface 'h2-eth0' not found in this namespace")
+2026-08-28 17:08:39,676 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:08:39,676 [INFO]   cooldown 15.0s
+2026-08-28 17:08:54,676 [INFO] === cell 14/25 (rep 5/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 50, 'background_load_mbps': 50, 'schedule_index': 13, 'warmup_seconds': 30} ===
+2026-08-28 17:08:54,678 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:08:54,911 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:08:54,919 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:08:54,919 [INFO] Network.start: ready
+2026-08-28 17:10:40,277 [INFO] calibration rate=50 Mbps: offered=49.181 achieved=50.000 probe_loss=0.00% median=101.0 us p99=261.0 us
+2026-08-28 17:10:40,277 [INFO] Network.stop: tearing down
+2026-08-28 17:10:40,477 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:10:40,477 [INFO]   cooldown 15.0s
+2026-08-28 17:10:55,477 [INFO] === cell 15/25 (rep 3/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 100, 'background_load_mbps': 100, 'schedule_index': 14, 'warmup_seconds': 30} ===
+2026-08-28 17:10:55,478 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:10:55,732 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:10:55,739 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:10:55,739 [INFO] Network.start: ready
+2026-08-28 17:12:41,075 [INFO] calibration rate=100 Mbps: offered=98.360 achieved=98.354 probe_loss=28.70% median=116.0 us p99=531.2 us
+2026-08-28 17:12:41,075 [INFO] Network.stop: tearing down
+2026-08-28 17:12:41,263 [INFO]   → 713 probe records, 1 summary, 2396 resource records
+2026-08-28 17:12:41,263 [INFO]   cooldown 15.0s
+2026-08-28 17:12:56,263 [INFO] === cell 16/25 (rep 4/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 50, 'background_load_mbps': 50, 'schedule_index': 15, 'warmup_seconds': 30} ===
+2026-08-28 17:12:56,264 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:12:56,483 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:12:56,490 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:12:56,490 [INFO] Network.start: ready
+2026-08-28 17:14:41,853 [INFO] calibration rate=50 Mbps: offered=49.180 achieved=50.000 probe_loss=0.00% median=101.0 us p99=282.0 us
+2026-08-28 17:14:41,853 [INFO] Network.stop: tearing down
+2026-08-28 17:14:42,054 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:14:42,054 [INFO]   cooldown 15.0s
+2026-08-28 17:14:57,054 [INFO] === cell 17/25 (rep 3/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 10, 'background_load_mbps': 10, 'schedule_index': 16, 'warmup_seconds': 30} ===
+2026-08-28 17:14:57,055 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:14:57,275 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:14:57,284 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:14:57,284 [INFO] Network.start: ready
+2026-08-28 17:16:42,630 [INFO] calibration rate=10 Mbps: offered=9.836 achieved=9.836 probe_loss=0.00% median=103.0 us p99=206.1 us
+2026-08-28 17:16:42,630 [INFO] Network.stop: tearing down
+2026-08-28 17:16:42,820 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:16:42,821 [INFO]   cooldown 15.0s
+2026-08-28 17:16:57,821 [INFO] === cell 18/25 (rep 4/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 100, 'background_load_mbps': 100, 'schedule_index': 17, 'warmup_seconds': 30} ===
+2026-08-28 17:16:57,822 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:16:58,064 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:16:58,072 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:16:58,072 [INFO] Network.start: ready
+2026-08-28 17:18:43,428 [INFO] calibration rate=100 Mbps: offered=98.360 achieved=99.993 probe_loss=26.90% median=115.0 us p99=465.0 us
+2026-08-28 17:18:43,428 [INFO] Network.stop: tearing down
+2026-08-28 17:18:43,635 [INFO]   → 731 probe records, 1 summary, 2396 resource records
+2026-08-28 17:18:43,635 [INFO]   cooldown 15.0s
+2026-08-28 17:18:58,635 [INFO] === cell 19/25 (rep 5/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 10, 'background_load_mbps': 10, 'schedule_index': 18, 'warmup_seconds': 30} ===
+2026-08-28 17:18:58,636 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:18:58,847 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:18:58,855 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:18:58,855 [INFO] Network.start: ready
+2026-08-28 17:20:44,182 [INFO] calibration rate=10 Mbps: offered=9.836 achieved=10.000 probe_loss=0.00% median=103.0 us p99=218.1 us
+2026-08-28 17:20:44,182 [INFO] Network.stop: tearing down
+2026-08-28 17:20:44,397 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:20:44,397 [INFO]   cooldown 15.0s
+2026-08-28 17:20:59,397 [INFO] === cell 20/25 (rep 5/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 100, 'background_load_mbps': 100, 'schedule_index': 19, 'warmup_seconds': 30} ===
+2026-08-28 17:20:59,398 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:20:59,623 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:20:59,630 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:20:59,630 [INFO] Network.start: ready
+2026-08-28 17:22:44,953 [INFO] calibration rate=100 Mbps: offered=100.001 achieved=99.989 probe_loss=28.60% median=115.0 us p99=471.6 us
+2026-08-28 17:22:44,953 [INFO] Network.stop: tearing down
+2026-08-28 17:22:45,175 [INFO]   → 714 probe records, 1 summary, 2396 resource records
+2026-08-28 17:22:45,175 [INFO]   cooldown 15.0s
+2026-08-28 17:23:00,175 [INFO] === cell 21/25 (rep 3/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 25, 'background_load_mbps': 25, 'schedule_index': 20, 'warmup_seconds': 30} ===
+2026-08-28 17:23:00,176 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:23:00,395 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:23:00,402 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:23:00,402 [INFO] Network.start: ready
+2026-08-28 17:24:45,764 [INFO] calibration rate=25 Mbps: offered=24.590 achieved=25.000 probe_loss=0.00% median=102.0 us p99=254.1 us
+2026-08-28 17:24:45,764 [INFO] Network.stop: tearing down
+2026-08-28 17:24:45,954 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:24:45,954 [INFO]   cooldown 15.0s
+2026-08-28 17:25:00,954 [INFO] === cell 22/25 (rep 4/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 25, 'background_load_mbps': 25, 'schedule_index': 21, 'warmup_seconds': 30} ===
+2026-08-28 17:25:00,954 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:25:01,183 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:25:01,190 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:25:01,191 [INFO] Network.start: ready
+2026-08-28 17:26:46,515 [INFO] calibration rate=25 Mbps: offered=25.000 achieved=24.590 probe_loss=0.00% median=102.0 us p99=230.1 us
+2026-08-28 17:26:46,515 [INFO] Network.stop: tearing down
+2026-08-28 17:26:46,724 [INFO]   → 1000 probe records, 1 summary, 2400 resource records
+2026-08-28 17:26:46,724 [INFO]   cooldown 15.0s
+2026-08-28 17:27:01,724 [INFO] === cell 23/25 (rep 1/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 10, 'background_load_mbps': 10, 'schedule_index': 22, 'warmup_seconds': 30} ===
+2026-08-28 17:27:01,725 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:27:01,955 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:27:01,963 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:27:01,963 [INFO] Network.start: ready
+2026-08-28 17:28:47,306 [INFO] calibration rate=10 Mbps: offered=9.836 achieved=10.000 probe_loss=0.00% median=103.0 us p99=210.0 us
+2026-08-28 17:28:47,306 [INFO] Network.stop: tearing down
+2026-08-28 17:28:47,424 [INFO] Network.stop: tearing down
+2026-08-28 17:28:47,480 [WARNING] veth destroy VethPair('h1-eth0', 's1-eth1'): LinkError("interface 'h1-eth0' not found in this namespace")
+2026-08-28 17:28:47,484 [WARNING] veth destroy VethPair('h2-eth0', 's1-eth2'): LinkError("interface 'h2-eth0' not found in this namespace")
+2026-08-28 17:28:47,508 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:28:47,508 [INFO]   cooldown 15.0s
+2026-08-28 17:29:02,508 [INFO] === cell 24/25 (rep 4/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 10, 'background_load_mbps': 10, 'schedule_index': 23, 'warmup_seconds': 30} ===
+2026-08-28 17:29:02,509 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:29:02,728 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:29:02,734 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:29:02,735 [INFO] Network.start: ready
+2026-08-28 17:30:48,084 [INFO] calibration rate=10 Mbps: offered=9.836 achieved=10.000 probe_loss=0.00% median=104.0 us p99=209.0 us
+2026-08-28 17:30:48,084 [INFO] Network.stop: tearing down
+2026-08-28 17:30:48,296 [INFO]   → 1000 probe records, 1 summary, 2396 resource records
+2026-08-28 17:30:48,296 [INFO]   cooldown 15.0s
+2026-08-28 17:31:03,296 [INFO] === cell 25/25 (rep 1/5): {'rq': 0, 'workload_type': 'saturation_sweep', 'p4_program': 'l3_lpm', 'topology': 'single_switch', 'n_switches': 1, 'n_probes': 1000, 'probe_interval_ms': 60.0, 'probe_packet_size_bytes': 256, 'measurement_seconds': 60, 'iperf_tail_seconds': 15, 'iperf_udp_length_bytes': 1448, 'repetitions': 5, 'rate_mbps': 100, 'background_load_mbps': 100, 'schedule_index': 24, 'warmup_seconds': 30} ===
+2026-08-28 17:31:03,297 [INFO] Network.start: 2 hosts, 1 switches, 2 links
+2026-08-28 17:31:03,531 [INFO] BMv2 's1' ready on 127.0.0.1:50051
+2026-08-28 17:31:03,539 [INFO] P4Runtime client connected to 's1' as primary
+2026-08-28 17:31:03,539 [INFO] Network.start: ready
+2026-08-28 17:32:48,863 [INFO] calibration rate=100 Mbps: offered=100.000 achieved=98.356 probe_loss=22.20% median=112.0 us p99=478.8 us
+2026-08-28 17:32:48,863 [INFO] Network.stop: tearing down
+2026-08-28 17:32:49,070 [INFO]   → 778 probe records, 1 summary, 2396 resource records
+2026-08-28 17:32:49,070 [INFO]   cooldown 15.0s
+2026-08-28 17:33:04,071 [INFO] Campaign complete. JSONL: data/raw/saturation_sweep_c3_f658a307-fcc1-40f2-9580-58aa05dfce4e.jsonl (failures=0)
