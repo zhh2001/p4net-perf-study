@@ -27,11 +27,27 @@ from workloads.latency_probe import (
     MIN_PROBE_BYTES_L2,
     MIN_PROBE_BYTES_L3,
     SEQ_BYTES,
+    _decode_sample,
     build_l2_probe,
     build_l3_probe,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_decode_sample_uses_explicit_post_instrument_offset() -> None:
+    instrument = (123).to_bytes(6, "big") + (456).to_bytes(6, "big")
+    shim = bytes(range(13))
+    sequence = 789
+    decoded = _decode_sample(
+        instrument + shim + sequence.to_bytes(4, "big"),
+        post_instrument_bytes=len(shim),
+    )
+    assert decoded == {
+        "sequence": sequence,
+        "ingress_ts_us": 123,
+        "egress_ts_us": 456,
+    }
 
 
 # ---------------------------------------------------------------------------
