@@ -28,6 +28,7 @@ from __future__ import annotations
 import shutil
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -64,6 +65,26 @@ def test_background_traffic_rejects_negative_rate() -> None:
             receiver_ip="10.0.0.2",
             rate_mbps=-1,
         )
+
+
+def test_background_traffic_liveness_guard_checks_both_processes() -> None:
+    bg = BackgroundTraffic(
+        net=None,
+        sender_host="h1",
+        receiver_host="h2",
+        sender_ip="10.0.0.1",
+        receiver_ip="10.0.0.2",
+        rate_mbps=1,
+    )
+    bg._server_proc = MagicMock()
+    bg._client_proc = MagicMock()
+    bg._server_proc.poll.return_value = None
+    bg._client_proc.poll.return_value = None
+    bg.ensure_running()
+
+    bg._client_proc.poll.return_value = 1
+    with pytest.raises(RuntimeError, match="client exited unexpectedly"):
+        bg.ensure_running()
 
 
 def _rx_bytes(host: object, iface: str) -> int:
