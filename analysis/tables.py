@@ -1,27 +1,44 @@
-"""Generate LaTeX (booktabs) table snippets for paper §3-§8.
+"""Generate LaTeX tables from the clean five-restart RQ summaries.
 
-Each callable writes a single ``\\begin{tabular}{...}...\\end{tabular}``
-block (no surrounding ``table`` / ``caption`` — the paper writer adds
-those around ``\\input{tables/foo.tex}``). Style: booktabs only
-(``\\toprule`` / ``\\midrule`` / ``\\bottomrule``), no ``\\hline``, no
-vertical rules.
+The inputs are the configuration-level files written by
+``analysis.aggregate_clean``. Every numeric table cell is therefore a
+run-level statistic summarized across five independent restarts as
+``median [minimum--maximum]``. Legacy rep1/rep2, cross-day divergence, and
+cross-phase data are deliberately outside this generator.
 
 CLI::
 
-    python -m analysis.tables --summary data/summaries/ --output paper/tables/
+    python -m analysis.tables --summary data/summaries \
+        --output paper/tables --label c4_clean
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import math
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
-PROGRAMS = ["l2_forward", "l3_lpm", "l3_lpm_acl", "l3_lpm_int"]
-SIZES = [64, 256, 1500]
-LOADS = [1, 25, 45]
+PROGRAMS = ("l2_forward", "l3_lpm", "l3_lpm_acl", "l3_lpm_int")
+SIZES = (64, 256, 1500)
+LOADS = (1, 25, 45)
+RQ2_NS = (1, 2, 4, 8)
+RQ2_KS = (10, 100, 1000)
+RQ3_NS = (2, 3)
+RQ3_LOADS = (0, 25, 45)
+EXPECTED_REPETITIONS = 5
+RQ4_CONFIGS = (
+    ("l3_lpm", "single_switch", 1, 1),
+    ("l3_lpm", "single_switch", 1, 45),
+    ("l3_lpm", "linear_n", 4, 1),
+    ("l3_lpm", "linear_n", 4, 45),
+    ("l3_lpm", "linear_n", 8, 1),
+    ("l3_lpm", "linear_n", 8, 45),
+    ("l3_lpm_acl", "linear_n", 4, 1),
+    ("l3_lpm_int", "linear_n", 4, 1),
+)
 
 
 def _write(path: Path, body: str) -> None:
@@ -29,377 +46,300 @@ def _write(path: Path, body: str) -> None:
     path.write_text(body + "\n", encoding="utf-8")
 
 
-def _lookup_rq1(df: pd.DataFrame, prog: str, size: int, load: int, cold: bool = False) -> float:
-    sub = df[
-        (df["p4_program"] == prog)
-        & (df["packet_size_bytes"] == size)
-        & (df["background_load_mbps"] == load)
-        & (df["cold_idle_reference"] == cold)
+def _latex_texttt(value: Any) -> str:
+    return "\\texttt{" + str(value).replace("_", "\\_") + "}"
+
+
+def _require_columns(df: pd.DataFrame, source: str, columns: set[str]) -> None:
+    missing = sorted(columns - set(df.columns))
+    if missing:
+        raise ValueError(f"{source} is missing required columns: {', '.join(missing)}")
+    if df.empty:
+        raise ValueError(f"{source} is empty")
+    repetitions = pd.to_numeric(df["n_reps"], errors="coerce")
+    if repetitions.isna().any() or not (repetitions == EXPECTED_REPETITIONS).all():
+        observed = sorted({str(value) for value in df["n_reps"].tolist()})
+        raise ValueError(
+            f"{source} must contain n_reps={EXPECTED_REPETITIONS} for every row; "
+            f"observed {observed}"
+        )
+
+
+def _one_row(df: pd.DataFrame, source: str, **criteria: Any) -> pd.Series:
+    selected = df
+    for column, expected in criteria.items():
+        selected = selected[selected[column] == expected]
+    if len(selected) != 1:
+        rendered = ", ".join(f"{key}={value!r}" for key, value in criteria.items())
+        raise ValueError(
+            f"{source} must contain exactly one row for {rendered}; found {len(selected)}"
+        )
+    return selected.iloc[0]
+
+
+def _format_range(
+    row: pd.Series,
+    metric: str,
+    decimals: int,
+    *,
+    scale: float = 1.0,
+) -> str:
+    values = [
+        float(row[f"{metric}_{suffix}"]) / scale
+        for suffix in ("median", "min", "max")
     ]
-    if sub.empty:
-        return float("nan")
-    return float(sub["median_us"].iloc[0])
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError(f"non-finite {metric} range: {values}")
+    median, minimum, maximum = values
+    if minimum > median or median > maximum:
+        raise ValueError(
+            f"invalid {metric} range: median={median}, minimum={minimum}, maximum={maximum}"
+        )
+    rendered = [f"{value:.{decimals}f}" for value in values]
+    return f"{rendered[0]} [{rendered[1]}\\,--\\,{rendered[2]}]"
 
 
-def _fmt(x: float, fmt: str = ".0f") -> str:
-    """NaN-safe formatter — emits an em-dash for missing data."""
-    if x != x:  # NaN
-        return "---"
-    return format(x, fmt)
+def tab_rq1_main_matrix(out_dir: Path, rq1: pd.DataFrame) -> None:
+    """Write RQ1 run-median latency with its five-restart range."""
+    source = "RQ1 clean summary"
+    required = {
+        "p4_program",
+        "packet_size_bytes",
+        "background_load_mbps",
+        "cold_idle_reference",
+        "n_reps",
+        "median_us_median",
+        "median_us_min",
+        "median_us_max",
+    }
+    _require_columns(rq1, source, required)
 
-
-# ---------------------------------------------------------------------------
-# §3 platform.
-# ---------------------------------------------------------------------------
-
-
-def tab_hardware_software(out_dir: Path, summary_dir: Path) -> None:
-    # Find any system_info_*.json — they all have the same hardware
-    # fingerprint on this single rig. Fall back to a recorded reference
-    # set if none are present (e.g., tests).
-    candidates = sorted(summary_dir.parent.glob("raw_rep1/system_info_*.json"))
-    if not candidates:
-        candidates = sorted(summary_dir.parent.glob("raw_rep2/system_info_*.json"))
-    info = {}
-    if candidates:
-        info = json.loads(candidates[0].read_text())
-    # Project a stable set of fields onto the table.
-    rows = [
-        ("CPU model", info.get("cpu_model", "13th Gen Intel(R) Core(TM) i5-13500H")),
-        ("CPU physical cores", str(info.get("cpu_cores_physical", 8))),
-        ("CPU logical cores", str(info.get("cpu_cores_logical", 16))),
-        ("RAM (GB)", f"{info.get('ram_total_gb', 11.68):.2f}"),
-        ("Distro", info.get("distro", "Ubuntu 24.04.4 LTS")),
-        ("Kernel", info.get("kernel_version", "6.6.87.2-microsoft-standard-WSL2")),
-        ("Python", info.get("python_version", "3.12.3")),
-        ("p4net", info.get("p4net_version", "1.7.0")),
-        ("p4c", info.get("p4c_version", "p4c 1.2.5.10")),
-        ("BMv2", info.get("bmv2_version", "1.15.0-2bdd0b7b")),
-    ]
     body = [
-        "\\begin{tabular}{ll}",
-        "\\toprule",
-        "\\textbf{Component} & \\textbf{Value} \\\\",
-        "\\midrule",
-    ]
-    for k, v in rows:
-        body.append(f"{k} & \\texttt{{{v}}} \\\\")
-    body.append("\\bottomrule")
-    body.append("\\end{tabular}")
-    _write(out_dir / "tab_hardware_software.tex", "\n".join(body))
-
-
-# ---------------------------------------------------------------------------
-# §4 experimental matrix.
-# ---------------------------------------------------------------------------
-
-
-def tab_experimental_matrix(out_dir: Path) -> None:
-    rows = [
-        (
-            "RQ1",
-            "single\\_switch",
-            "$4 \\times 3 \\times 3 = 36 + 1$ cold-idle",
-            "1\\,000 probes/cell",
-            "1",
-        ),
-        (
-            "RQ2",
-            "linear\\_n ($N \\in \\{1,2,4,8\\}$)",
-            "$42$ ($N{=}1$ sync-only)",
-            "10 reps/cell",
-            "1",
-        ),
-        ("RQ3", "linear\\_n (2- and 3-hop)", "$2 \\times 3 = 6$", "1\\,000 INT probes/cell", "1"),
-        ("RQ4", "single + linear\\_n", "8 explicit", "60\\,s @ 100\\,ms cadence", "1"),
-    ]
-    body = [
-        "\\begin{tabular}{lllll}",
-        "\\toprule",
-        "\\textbf{RQ} & \\textbf{Topology} & \\textbf{Configs} & "
-        "\\textbf{Sampling} & \\textbf{Reps} \\\\",
-        "\\midrule",
-    ]
-    for r in rows:
-        body.append(" & ".join(r) + " \\\\")
-    body.append("\\bottomrule")
-    body.append("\\end{tabular}")
-    _write(out_dir / "tab_experimental_matrix.tex", "\n".join(body))
-
-
-# ---------------------------------------------------------------------------
-# §5 RQ1 main matrix.
-# ---------------------------------------------------------------------------
-
-
-def tab_rq1_main_matrix(out_dir: Path, rq1_r1: pd.DataFrame, rq1_r2: pd.DataFrame) -> None:
-    body = [
-        "\\begin{tabular}{ll" + "r" * len(LOADS) + "}",
+        "\\begin{tabular}{ll" + "l" * len(LOADS) + "}",
         "\\toprule",
         "\\textbf{Program} & \\textbf{Size (B)} & "
         + " & ".join(f"\\textbf{{{load}\\,Mbps}}" for load in LOADS)
         + " \\\\",
         "\\midrule",
     ]
-    for prog in PROGRAMS:
+    for program in PROGRAMS:
         for size in SIZES:
             cells = []
             for load in LOADS:
-                m1 = _lookup_rq1(rq1_r1, prog, size, load)
-                m2 = _lookup_rq1(rq1_r2, prog, size, load)
-                if m1 != m1:
-                    cells.append("---")
-                else:
-                    cells.append(f"{m1:.0f} \\textit{{\\small ({m2:.0f})}}")
-            body.append(f"\\texttt{{{prog}}} & {size} & " + " & ".join(cells) + " \\\\")
-    # Cold-idle reference row.
-    m1 = _lookup_rq1(rq1_r1, "l3_lpm", 256, 0, cold=True)
-    m2 = _lookup_rq1(rq1_r2, "l3_lpm", 256, 0, cold=True)
-    body.append("\\midrule")
-    cold_cell = "---" if m1 != m1 else f"{m1:.0f} \\textit{{\\small ({m2:.0f})}}"
-    body.append(
-        "\\multicolumn{2}{l}{\\textit{cold-idle reference}} & " + cold_cell + " & --- & --- \\\\"
+                row = _one_row(
+                    rq1,
+                    source,
+                    p4_program=program,
+                    packet_size_bytes=size,
+                    background_load_mbps=load,
+                    cold_idle_reference=False,
+                )
+                cells.append(_format_range(row, "median_us", 1))
+            body.append(
+                f"{_latex_texttt(program)} & {size} & "
+                + " & ".join(cells)
+                + " \\\\"
+            )
+
+    cold = _one_row(
+        rq1,
+        source,
+        p4_program="l3_lpm",
+        packet_size_bytes=256,
+        background_load_mbps=0,
+        cold_idle_reference=True,
     )
-    body.append("\\bottomrule")
-    body.append("\\end{tabular}")
+    body.extend(
+        [
+            "\\midrule",
+            "\\multicolumn{2}{l}{\\textit{cold-idle reference}} & "
+            + _format_range(cold, "median_us", 1)
+            + " & --- & --- \\\\ ",
+            "\\bottomrule",
+            "\\end{tabular}",
+        ]
+    )
     _write(out_dir / "tab_rq1_main_matrix.tex", "\n".join(body))
 
 
-# ---------------------------------------------------------------------------
-# §6 RQ2 N×K grid.
-# ---------------------------------------------------------------------------
-
-
 def tab_rq2_n_k_grid(out_dir: Path, rq2: pd.DataFrame) -> None:
-    Ns = sorted(rq2["n_switches"].unique())
-    Ks = sorted(rq2["n_entries_per_switch"].unique())
+    """Write INSERT/READ blocks of wall-clock run medians and ranges."""
+    source = "RQ2 clean summary"
+    required = {
+        "n_switches",
+        "n_entries_per_switch",
+        "operation",
+        "mode",
+        "n_reps",
+        "wall_clock_s_median",
+        "wall_clock_s_min",
+        "wall_clock_s_max",
+    }
+    _require_columns(rq2, source, required)
 
-    def block(op: str) -> list[str]:
-        rows = [
-            f"\\multicolumn{{{1 + 3 * len(Ks)}}}{{l}}{{\\textbf{{{op.upper()}}}}} \\\\",
-            "\\cmidrule(lr){1-" + str(1 + 3 * len(Ks)) + "}",
-            "\\textbf{N} & "
-            + " & ".join(f"\\multicolumn{{3}}{{c}}{{\\textbf{{K={k}}}}}" for k in Ks)
-            + " \\\\",
-        ]
-        sub = " & ".join(["sync", "async", "$\\times$"] * len(Ks))
-        rows.append("& " + sub + " \\\\")
-        for n in Ns:
-            cells = [str(n)]
-            for k in Ks:
-                sync_r = rq2[
-                    (rq2["n_switches"] == n)
-                    & (rq2["n_entries_per_switch"] == k)
-                    & (rq2["operation"] == op)
-                    & (rq2["mode"] == "sync")
-                ]
-                async_r = rq2[
-                    (rq2["n_switches"] == n)
-                    & (rq2["n_entries_per_switch"] == k)
-                    & (rq2["operation"] == op)
-                    & (rq2["mode"] == "async")
-                ]
-                s = float(sync_r["median_s"].iloc[0]) if not sync_r.empty else float("nan")
-                a = float(async_r["median_s"].iloc[0]) if not async_r.empty else float("nan")
-                r = s / a if (a == a and a > 0) else float("nan")
-                cells += [_fmt(s, ".4f"), _fmt(a, ".4f"), _fmt(r, ".2f")]
-            rows.append(" & ".join(cells) + " \\\\")
-        return rows
-
-    body = ["\\begin{tabular}{l" + "rrr" * len(Ks) + "}", "\\toprule"]
-    body += block("insert")
-    body.append("\\midrule")
-    body += block("read")
-    body.append("\\bottomrule")
-    body.append("\\end{tabular}")
+    body = ["\\begin{tabular}{rrlll}", "\\toprule"]
+    for block_index, operation in enumerate(("insert", "read")):
+        if block_index:
+            body.append("\\midrule")
+        body.extend(
+            [
+                f"\\multicolumn{{5}}{{l}}{{\\textbf{{{operation.upper()}}}}} \\\\ ",
+                "\\textbf{$N$} & \\textbf{Mode} & "
+                + " & ".join(f"\\textbf{{$K={k}$}}" for k in RQ2_KS)
+                + " \\\\",
+                "\\cmidrule(lr){1-5}",
+            ]
+        )
+        for n_switches in RQ2_NS:
+            modes = ("sync",) if n_switches == 1 else ("sync", "async")
+            for mode in modes:
+                cells = []
+                for n_entries in RQ2_KS:
+                    row = _one_row(
+                        rq2,
+                        source,
+                        n_switches=n_switches,
+                        n_entries_per_switch=n_entries,
+                        operation=operation,
+                        mode=mode,
+                    )
+                    cells.append(_format_range(row, "wall_clock_s", 4))
+                body.append(
+                    f"{n_switches} & {mode} & " + " & ".join(cells) + " \\\\"
+                )
+    body.extend(["\\bottomrule", "\\end{tabular}"])
     _write(out_dir / "tab_rq2_n_k_grid.tex", "\n".join(body))
 
 
-# ---------------------------------------------------------------------------
-# §7 RQ3 drift summary.
-# ---------------------------------------------------------------------------
+def tab_rq3_drift_summary(out_dir: Path, rq3: pd.DataFrame) -> None:
+    """Write signed, absolute, and within-run-IQR drift summaries."""
+    source = "RQ3 clean summary"
+    required = {"n_switches", "background_load_mbps", "n_reps"}
+    for metric in ("median_us", "abs_median_us", "iqr_us"):
+        required.update(f"{metric}_{suffix}" for suffix in ("median", "min", "max"))
+    _require_columns(rq3, source, required)
 
-
-def tab_rq3_drift_summary(out_dir: Path, rq3_r1: pd.DataFrame, rq3_r2: pd.DataFrame) -> None:
-    merged = rq3_r1.merge(
-        rq3_r2, on=["n_switches", "background_load_mbps"], suffixes=("_r1", "_r2")
-    )
     body = [
-        "\\begin{tabular}{rrrrrr}",
+        "\\begin{tabular}{rrlll}",
         "\\toprule",
-        "\\textbf{N} & \\textbf{Load (Mbps)} & "
-        "\\textbf{$|mean|_{r1}$ (μs)} & \\textbf{$|mean|_{r2}$ (μs)} & "
-        "\\textbf{$std_{r1}$ (μs)} & \\textbf{$std_{r2}$ (μs)} \\\\",
+        "\\textbf{$N$} & \\textbf{Load (Mbps)} & \\textbf{Signed median ($\\mu$s)} & "
+        "\\textbf{Absolute median ($\\mu$s)} & \\textbf{Within-run IQR ($\\mu$s)} \\\\",
         "\\midrule",
     ]
-    for _, row in merged.iterrows():
-        body.append(
-            f"{int(row['n_switches'])} & {int(row['background_load_mbps'])} & "
-            f"{row['abs_mean_us_r1']:.0f} & {row['abs_mean_us_r2']:.0f} & "
-            f"{row['std_us_r1']:.0f} & {row['std_us_r2']:.0f} \\\\"
-        )
-    body.append("\\bottomrule")
-    body.append("\\end{tabular}")
+    for n_switches in RQ3_NS:
+        for load in RQ3_LOADS:
+            row = _one_row(
+                rq3,
+                source,
+                n_switches=n_switches,
+                background_load_mbps=load,
+            )
+            body.append(
+                f"{n_switches} & {load} & {_format_range(row, 'median_us', 1)} & "
+                f"{_format_range(row, 'abs_median_us', 1)} & "
+                f"{_format_range(row, 'iqr_us', 1)} \\\\"
+            )
+    body.extend(["\\bottomrule", "\\end{tabular}"])
     _write(out_dir / "tab_rq3_drift_summary.tex", "\n".join(body))
 
 
-# ---------------------------------------------------------------------------
-# §8 RQ4 resource summary.
-# ---------------------------------------------------------------------------
-
-
 def tab_rq4_resource_summary(out_dir: Path, rq4: pd.DataFrame) -> None:
-    sub = rq4[rq4["source_workload_type"] == "resource_only"].copy()
-    # Reduce to one row per (config) via metric pivot.
-    cfg_keys = ["p4_program", "topology", "n_switches", "background_load_mbps"]
-    cpu = sub[sub["metric"] == "cpu_percent_per_bmv2"].set_index(cfg_keys)["mean"]
-    cpu_max = sub[sub["metric"] == "cpu_percent_per_bmv2"].set_index(cfg_keys)["max"]
-    rss = sub[sub["metric"] == "rss_per_bmv2_bytes"].set_index(cfg_keys)["max"] / 1e6
-    rx = sub[sub["metric"] == "net_io_pps_per_iface"].set_index(cfg_keys)["mean"]
-    keys = sorted(set(cpu.index) | set(rss.index))
+    """Write selected RQ4 run-level resource statistics across restarts."""
+    source = "RQ4 clean summary"
+    required = {
+        "p4_program",
+        "topology",
+        "n_switches",
+        "background_load_mbps",
+        "source_workload_type",
+        "metric",
+        "n_reps",
+    }
+    for metric in ("mean", "p95", "max"):
+        required.update(f"{metric}_{suffix}" for suffix in ("median", "min", "max"))
+    _require_columns(rq4, source, required)
+    resource = rq4[rq4["source_workload_type"] == "resource_only"].copy()
+    if resource.empty:
+        raise ValueError("RQ4 clean summary has no resource_only rows")
 
+    config_columns = ["p4_program", "topology", "n_switches", "background_load_mbps"]
+    configs = sorted(
+        set(resource[config_columns].itertuples(index=False, name=None)),
+        key=lambda item: (str(item[0]), str(item[1]), int(item[2]), float(item[3])),
+    )
+    expected_configs = set(RQ4_CONFIGS)
+    actual_configs = set(configs)
+    if actual_configs != expected_configs:
+        missing = sorted(expected_configs - actual_configs)
+        extra = sorted(actual_configs - expected_configs)
+        raise ValueError(
+            f"RQ4 clean summary configuration mismatch: missing={missing}, extra={extra}"
+        )
     body = [
-        "\\begin{tabular}{lrrrr}",
+        "\\begin{tabular}{lllll}",
         "\\toprule",
-        "\\textbf{Config} & \\textbf{CPU avg (\\%)} & \\textbf{CPU max (\\%)} & "
-        "\\textbf{RSS max (MB)} & \\textbf{RX pps} \\\\",
+        "\\textbf{Configuration} & \\textbf{CPU mean (\\%)} & "
+        "\\textbf{CPU p95 (\\%)} & \\textbf{RSS max (MB)} & "
+        "\\textbf{Aggregate RX mean (pps)} \\\\",
         "\\midrule",
     ]
-    for key in keys:
-        prog, topo, n, load = key
-        label = f"\\texttt{{{prog}}} {topo} $N{{=}}{n}$ {load}\\,Mbps"
-        c_avg = cpu.get(key, float("nan"))
-        c_max = cpu_max.get(key, float("nan"))
-        r_max = rss.get(key, float("nan"))
-        x_avg = rx.get(key, float("nan"))
-        body.append(
-            f"{label} & {_fmt(c_avg, '.2f')} & {_fmt(c_max, '.1f')} & "
-            f"{_fmt(r_max, '.1f')} & {_fmt(x_avg, '.0f')} \\\\"
+    for program, topology, n_switches, load in RQ4_CONFIGS:
+        criteria = {
+            "p4_program": program,
+            "topology": topology,
+            "n_switches": n_switches,
+            "background_load_mbps": load,
+            "source_workload_type": "resource_only",
+        }
+        cpu = _one_row(resource, source, **criteria, metric="cpu_percent_per_bmv2")
+        rss = _one_row(resource, source, **criteria, metric="rss_per_bmv2_bytes")
+        rx = _one_row(resource, source, **criteria, metric="net_io_pps_per_iface")
+        label = (
+            f"{_latex_texttt(program)} {_latex_texttt(topology)} "
+            f"$N{{=}}{int(n_switches)}$ {float(load):g}\\,Mbps"
         )
-    body.append("\\bottomrule")
-    body.append("\\end{tabular}")
+        body.append(
+            f"{label} & {_format_range(cpu, 'mean', 1)} & "
+            f"{_format_range(cpu, 'p95', 1)} & "
+            f"{_format_range(rss, 'max', 1, scale=1_000_000.0)} & "
+            f"{_format_range(rx, 'mean', 1)} \\\\"
+        )
+    body.extend(["\\bottomrule", "\\end{tabular}"])
     _write(out_dir / "tab_rq4_resource_summary.tex", "\n".join(body))
 
 
-# ---------------------------------------------------------------------------
-# §4 cross-day divergence summary.
-# ---------------------------------------------------------------------------
-
-
-def tab_cross_day_divergence(out_dir: Path, divergence_summary: dict) -> None:
-    body = [
-        "\\begin{tabular}{lrrrrr}",
-        "\\toprule",
-        "\\textbf{RQ} & \\textbf{N configs} & \\textbf{Within 5\\%} & "
-        "\\textbf{Within 10\\%} & \\textbf{Within 20\\%} & \\textbf{max $|\\Delta\\%|$} \\\\",
-        "\\midrule",
-    ]
-    for rq in ("rq1", "rq2", "rq3", "rq4"):
-        stats = divergence_summary.get("per_rq", {}).get(rq)
-        if stats is None:
-            continue
-        body.append(
-            f"\\textbf{{{rq.upper()}}} & {int(stats['n_configs'])} & "
-            f"{stats['pct_within_5']:.1f}\\% & {stats['pct_within_10']:.1f}\\% & "
-            f"{stats['pct_within_20']:.1f}\\% & {stats['max_abs_delta_pct']:.1f}\\% \\\\"
-        )
-    body.append("\\bottomrule")
-    body.append("\\end{tabular}")
-    _write(out_dir / "tab_cross_day_divergence.tex", "\n".join(body))
-
-
-# ---------------------------------------------------------------------------
-# §4 cross-phase methodology table.
-# ---------------------------------------------------------------------------
-
-
-def tab_cross_phase_methodology(out_dir: Path) -> None:
-    rows = [
-        (
-            "B",
-            "none (cold-cache, offload bug)",
-            "242",
-            "---",
-            "---",
-            "---",
-            "Initial impl + first pilot",
-        ),
-        ("C", "none (offload bug found)", "238", "---", "---", "---", "veth L4 offload disabled"),
-        (
-            "D",
-            "none (offload + monitor)",
-            "216",
-            "---",
-            "---",
-            "---",
-            "Resource monitor added; 100~Mbps load infeasible",
-        ),
-        (
-            "E",
-            "warmup 30\\,s @ 1\\,Mbps then stop",
-            "523",
-            "---",
-            "108",
-            "108",
-            "Asymmetry persisted; cache-warming hypothesis failed",
-        ),
-        (
-            "F",
-            "continuous 1\\,Mbps carrier",
-            "550",
-            "126",
-            "96",
-            "100",
-            "Continuous-carrier methodology; cold/warm 4.4$\\times$ gap fixed",
-        ),
-    ]
-    body = [
-        "\\begin{tabular}{lllrrrl}",
-        "\\toprule",
-        "\\textbf{Phase} & \\textbf{Warmup policy} & "
-        "\\textbf{0\\,Mbps (μs)} & \\textbf{1\\,Mbps (μs)} & "
-        "\\textbf{25\\,Mbps (μs)} & \\textbf{45\\,Mbps (μs)} & "
-        "\\textbf{Methodology change} \\\\",
-        "\\midrule",
-    ]
-    for r in rows:
-        body.append(" & ".join(r) + " \\\\")
-    body.append("\\bottomrule")
-    body.append("\\end{tabular}")
-    _write(out_dir / "tab_cross_phase_methodology.tex", "\n".join(body))
-
-
-# ---------------------------------------------------------------------------
-# Entrypoint.
-# ---------------------------------------------------------------------------
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate LaTeX tables from summary CSVs.")
+    parser = argparse.ArgumentParser(
+        description="Generate LaTeX tables from clean five-restart summary CSVs."
+    )
     parser.add_argument("--summary", type=Path, default=Path("data/summaries"))
-    parser.add_argument("--output", type=Path, default=Path.home() / "projects/paper/tables")
+    parser.add_argument("--output", type=Path, default=Path("paper/tables"))
+    parser.add_argument(
+        "--label",
+        default="c4_clean",
+        help="summary filename label (default: c4_clean)",
+    )
     args = parser.parse_args(argv)
 
-    rq1_r1 = pd.read_csv(args.summary / "rq1_summary_rep1.csv")
-    rq1_r2 = pd.read_csv(args.summary / "rq1_summary_rep2.csv")
-    rq2 = pd.read_csv(args.summary / "rq2_summary_rep1.csv")
-    rq3_r1 = pd.read_csv(args.summary / "rq3_summary_rep1.csv")
-    rq3_r2 = pd.read_csv(args.summary / "rq3_summary_rep2.csv")
-    rq4 = pd.read_csv(args.summary / "rq4_summary_rep1.csv")
-    div_summary = json.loads((args.summary / "divergence_summary.json").read_text())
+    if not args.label or Path(args.label).name != args.label:
+        parser.error("--label must be a non-empty filename component")
+    paths = {
+        rq: args.summary / f"rq{rq}_summary_{args.label}.csv" for rq in range(1, 5)
+    }
+    missing = [path for path in paths.values() if not path.is_file()]
+    if missing:
+        parser.error(
+            "missing clean summary file(s): " + ", ".join(str(path) for path in missing)
+        )
 
+    summaries = {rq: pd.read_csv(path) for rq, path in paths.items()}
     args.output.mkdir(parents=True, exist_ok=True)
-    print(f"writing tables to {args.output}")
-    tab_hardware_software(args.output, args.summary)
-    tab_experimental_matrix(args.output)
-    tab_rq1_main_matrix(args.output, rq1_r1, rq1_r2)
-    tab_rq2_n_k_grid(args.output, rq2)
-    tab_rq3_drift_summary(args.output, rq3_r1, rq3_r2)
-    tab_rq4_resource_summary(args.output, rq4)
-    tab_cross_day_divergence(args.output, div_summary)
-    tab_cross_phase_methodology(args.output)
-    tex = sorted(args.output.glob("*.tex"))
-    print(f"  produced {len(tex)} LaTeX snippets")
+    print(f"writing clean five-restart tables to {args.output} (label={args.label})")
+    tab_rq1_main_matrix(args.output, summaries[1])
+    tab_rq2_n_k_grid(args.output, summaries[2])
+    tab_rq3_drift_summary(args.output, summaries[3])
+    tab_rq4_resource_summary(args.output, summaries[4])
+    print("  produced 4 LaTeX snippets")
     return 0
 
 
