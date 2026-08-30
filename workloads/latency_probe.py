@@ -21,7 +21,7 @@ to :func:`run_probe`:
   larger than requested for very small probe sizes.
 
 * **L3** (``probe_layer="l3"``) — for the IPv4 forwarding programs
-  (``l3_lpm.p4`` and variants). The frame is::
+  (``l3_lpm.p4`` and variants). The input frame is::
 
       Ethernet (14)  | dst=receiver_mac, src=sender_mac, type=0x0800
       IPv4    (20)   | proto=0xFD (probe), src=sender_ip, dst=receiver_ip
@@ -29,7 +29,10 @@ to :func:`run_probe`:
       seq      (4)   | sequence number (32b BE)
       padding  (N)   | zero, to reach packet_size_bytes total
 
-  Minimum size 50 bytes (Eth + IPv4 + instrument + seq).
+  Minimum size 50 bytes (Eth + IPv4 + instrument + seq). A program may
+  insert a fixed-size header between ``instrument`` and ``seq``. The
+  receiver is given that size explicitly so sequence decoding remains tied
+  to the selected P4 program rather than inferred from packet contents.
 
 Module surface:
 
@@ -142,13 +145,20 @@ def build_l3_probe(
     )
 
 
-def _decode_sample(payload: bytes) -> dict[str, int] | None:
-    """Parse instrument+sequence from the start of ``payload``."""
-    if len(payload) < INSTRUMENT_HEADER_BYTES + SEQ_BYTES:
+def _decode_sample(
+    payload: bytes, *, post_instrument_bytes: int = 0
+) -> dict[str, int] | None:
+    """Parse timestamps and sequence from one program-specific payload."""
+    if post_instrument_bytes < 0:
+        raise ValueError("post_instrument_bytes must be >= 0")
+    sequence_offset = INSTRUMENT_HEADER_BYTES + post_instrument_bytes
+    if len(payload) < sequence_offset + SEQ_BYTES:
         return None
     ingress_ts = int.from_bytes(payload[0:6], "big")
     egress_ts = int.from_bytes(payload[6:12], "big")
-    sequence = int.from_bytes(payload[12:16], "big")
+    sequence = int.from_bytes(
+        payload[sequence_offset : sequence_offset + SEQ_BYTES], "big"
+    )
     return {
         "sequence": sequence,
         "ingress_ts_us": ingress_ts,
@@ -174,6 +184,7 @@ def run_probe(
     probe_interval_ms: float,
     packet_size_bytes: int,
     sequence_start: int = 0,
+    post_instrument_bytes: int = 0,
 ) -> list[dict[str, Any]]:
     """Send ``n_probes`` probes from ``sender_host`` to ``receiver_host``.
 
@@ -201,6 +212,8 @@ def run_probe(
         raise ValueError("n_probes must be >= 1")
     if probe_interval_ms <= 0:
         raise ValueError("probe_interval_ms must be > 0")
+    if post_instrument_bytes < 0:
+        raise ValueError("post_instrument_bytes must be >= 0")
 
     sender = net.host(sender_host)
     receiver = net.host(receiver_host)
@@ -230,6 +243,8 @@ def run_probe(
         r_iface,
         "--probe-layer",
         probe_layer,
+        "--post-instrument-bytes",
+        str(post_instrument_bytes),
         "--max-capture-seconds",
         f"{max_capture_seconds:.3f}",
         "--drain-seconds",
@@ -404,7 +419,10 @@ def _receive_main(args: argparse.Namespace) -> int:
             return
         if int(pkt[Ether].type) != ETHERTYPE_PROBE_L2:
             return
-        decoded = _decode_sample(bytes(pkt[Ether].payload))
+        decoded = _decode_sample(
+            bytes(pkt[Ether].payload),
+            post_instrument_bytes=args.post_instrument_bytes,
+        )
         if decoded is not None:
             samples.append(decoded)
 
@@ -414,7 +432,10 @@ def _receive_main(args: argparse.Namespace) -> int:
         ip = pkt[IP]
         if int(ip.proto) != IP_PROTO_PROBE:
             return
-        decoded = _decode_sample(bytes(ip.payload))
+        decoded = _decode_sample(
+            bytes(ip.payload),
+            post_instrument_bytes=args.post_instrument_bytes,
+        )
         if decoded is not None:
             samples.append(decoded)
 
@@ -453,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", choices=("send", "receive"), required=True)
     parser.add_argument("--iface", required=True)
     parser.add_argument("--probe-layer", choices=(PROBE_LAYER_L2, PROBE_LAYER_L3), required=True)
+    parser.add_argument("--post-instrument-bytes", type=int, default=0)
     # send-mode args
     parser.add_argument("--sender-mac")
     parser.add_argument("--receiver-mac")

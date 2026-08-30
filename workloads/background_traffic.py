@@ -133,6 +133,22 @@ class BackgroundTraffic:
             setattr(self, proc_attr, None)
         self._close_log_files()
 
+    def ensure_running(self) -> None:
+        """Raise if either process in a positive-rate carrier has exited."""
+        if self.rate_mbps == 0:
+            return
+        for role, proc in (
+            ("server", self._server_proc),
+            ("client", self._client_proc),
+        ):
+            if proc is None:
+                raise RuntimeError(f"iperf3 {role} process was not started")
+            return_code = proc.poll()
+            if return_code is not None:
+                raise RuntimeError(
+                    f"iperf3 {role} exited unexpectedly with rc={return_code}"
+                )
+
     def __enter__(self) -> BackgroundTraffic:
         self.start()
         return self

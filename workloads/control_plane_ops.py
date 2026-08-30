@@ -32,8 +32,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     import p4net
@@ -42,6 +42,87 @@ logger = logging.getLogger(__name__)
 
 
 EntryGenerator = Callable[[int], dict[str, Any]]
+_T = TypeVar("_T")
+
+
+class AsyncWorkloadLoop:
+    """Own one event loop across related async control-plane phases.
+
+    ``grpc.aio`` binds its completion queue to the running event loop.  A
+    sequence of independent ``asyncio.run`` calls therefore closes the loop
+    used by one phase before gRPC has necessarily retired every completion
+    callback.  Keeping this loop open across the RQ2 campaign prevents a
+    later phase from waking callbacks that target an already-closed loop.
+
+    This small runner intentionally supports Python 3.10, where
+    :class:`asyncio.Runner` is not available.
+    """
+
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._exception_contexts: list[dict[str, Any]] = []
+
+    def __enter__(self) -> AsyncWorkloadLoop:
+        if self._loop is not None:
+            raise RuntimeError("async workload loop is already open")
+        self._loop = asyncio.new_event_loop()
+        self._loop.set_exception_handler(self._record_exception)
+        return self
+
+    def run(self, awaitable: Awaitable[_T]) -> _T:
+        """Run ``awaitable`` without closing the owned event loop."""
+        if self._loop is None or self._loop.is_closed():
+            raise RuntimeError("async workload loop is not open")
+        result = self._loop.run_until_complete(awaitable)
+        self._raise_recorded_exceptions()
+        return result
+
+    def _record_exception(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        context: dict[str, Any],
+    ) -> None:
+        """Record every unhandled loop callback/task error for fail-closed runs."""
+        self._exception_contexts.append(dict(context))
+        loop.default_exception_handler(context)
+
+    def _raise_recorded_exceptions(self) -> None:
+        if not self._exception_contexts:
+            return
+        contexts = self._exception_contexts
+        self._exception_contexts = []
+        details = []
+        for context in contexts:
+            message = str(context.get("message", "unhandled event-loop exception"))
+            exception = context.get("exception")
+            details.append(f"{message}: {exception!r}" if exception else message)
+        raise RuntimeError(
+            f"async workload event loop reported {len(contexts)} unhandled error(s): "
+            + " | ".join(details)
+        )
+
+    def close(self) -> None:
+        """Cancel residual tasks, drain async generators, and close the loop."""
+        loop = self._loop
+        if loop is None:
+            return
+        try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+            self._raise_recorded_exceptions()
+        finally:
+            loop.close()
+            self._loop = None
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.close()
 
 
 def default_lpm_entry_generator(seed: int = 0) -> EntryGenerator:
@@ -126,15 +207,22 @@ def run_insert_async(
     table_name: str,
     n_entries_per_switch: int,
     entry_generator: EntryGenerator,
+    *,
+    workload_loop: AsyncWorkloadLoop | None = None,
 ) -> dict[str, Any]:
-    """Insert entries across all switches concurrently via asyncio."""
+    """Insert entries across all switches concurrently via asyncio.
+
+    When ``workload_loop`` is supplied, its event loop remains open after
+    this phase so a following phase cannot encounter callbacks targeting a
+    loop closed by this function.
+    """
 
     async def _insert_one_switch(sw_name: str) -> tuple[int, int]:
         success = 0
         failure = 0
         client = net.switch(sw_name).async_client
-        await client.connect()
         try:
+            await client.connect()
             for i in range(n_entries_per_switch):
                 entry = entry_generator(i)
                 try:
@@ -153,10 +241,19 @@ def run_insert_async(
         return success, failure
 
     async def _all() -> list[tuple[int, int]]:
-        return await asyncio.gather(*[_insert_one_switch(s) for s in switches])
+        gathered = await asyncio.gather(
+            *[_insert_one_switch(s) for s in switches],
+            return_exceptions=True,
+        )
+        failures = [result for result in gathered if isinstance(result, BaseException)]
+        if failures:
+            raise failures[0]
+        return [result for result in gathered if isinstance(result, tuple)]
 
     t0 = time.perf_counter()
-    results = asyncio.run(_all())
+    results = (
+        workload_loop.run(_all()) if workload_loop is not None else asyncio.run(_all())
+    )
     total = time.perf_counter() - t0
 
     success_count = sum(r[0] for r in results)
@@ -205,13 +302,19 @@ def run_read_async(
     net: p4net.Network,
     switches: list[str],
     table_name: str,
+    *,
+    workload_loop: AsyncWorkloadLoop | None = None,
 ) -> dict[str, Any]:
-    """List entries from each switch concurrently via asyncio."""
+    """List entries from each switch concurrently via asyncio.
+
+    ``workload_loop`` has the same lifecycle semantics as in
+    :func:`run_insert_async`.
+    """
 
     async def _read_one(sw_name: str) -> int:
         client = net.switch(sw_name).async_client
-        await client.connect()
         try:
+            await client.connect()
             count = 0
             async for _ in client.list_table_entries(table_name):
                 count += 1
@@ -220,10 +323,19 @@ def run_read_async(
             await client.disconnect()
 
     async def _all() -> list[int]:
-        return await asyncio.gather(*[_read_one(s) for s in switches])
+        gathered = await asyncio.gather(
+            *[_read_one(s) for s in switches],
+            return_exceptions=True,
+        )
+        failures = [result for result in gathered if isinstance(result, BaseException)]
+        if failures:
+            raise failures[0]
+        return [result for result in gathered if isinstance(result, int)]
 
     t0 = time.perf_counter()
-    counts = asyncio.run(_all())
+    counts = (
+        workload_loop.run(_all()) if workload_loop is not None else asyncio.run(_all())
+    )
     total = time.perf_counter() - t0
 
     total_entries = sum(counts)
