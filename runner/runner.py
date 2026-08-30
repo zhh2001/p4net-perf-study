@@ -4,7 +4,9 @@ Reads a YAML campaign config, executes each configuration block in
 seeded-random order, and writes one JSONL record per captured sample
 (RQ1, RQ3) or per repetition (RQ2) to ``data/raw/{name}_{run_id}.jsonl``.
 A single ``system_info`` snapshot is written alongside, one per
-runner invocation.
+runner invocation. Every invocation also writes an artifacts-directory
+manifest containing the resolved schedule, campaign config, creation time,
+and SHA-256 hashes of the repository inputs used by the campaign.
 
 Config dispatch — each block must carry a ``workload_type`` field:
 
@@ -75,12 +77,15 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import sys
 import time
 import uuid
+from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +99,7 @@ from topologies.single_switch import H1_IP, H1_MAC, H2_IP, H2_MAC
 from topologies.single_switch import build as build_single_switch
 from workloads.background_traffic import BackgroundTraffic
 from workloads.control_plane_ops import (
+    AsyncWorkloadLoop,
     default_lpm_entry_generator,
     run_insert_async,
     run_insert_sync,
@@ -117,6 +123,10 @@ P4_PROGRAM_PATHS = {
     "l3_lpm_acl": "p4/l3_lpm_acl.p4",
     "l3_lpm_int": "p4/l3_lpm_int.p4",
     "l3_lpm_int_chain": "p4/l3_lpm_int_chain.p4",
+}
+
+P4_POST_INSTRUMENT_BYTES = {
+    "l3_lpm_int": 13,
 }
 
 WORKLOAD_LATENCY_L2 = "latency_l2"
@@ -172,8 +182,9 @@ def _build_execution_cells(
 
     Existing campaigns preserve their historical behaviour: configuration
     blocks are shuffled, then repetitions of each block run consecutively.
-    Calibration can opt into shuffling all rate/repetition cells so temporal
-    drift is not confounded with one rate while retaining a fixed seed.
+    A campaign can opt into shuffling all configuration/repetition cells so
+    temporal drift is not confounded with one configuration while retaining
+    a fixed seed.
     """
     rng = random.Random(seed)
     expanded_configs: list[dict[str, Any]] = []
@@ -257,7 +268,49 @@ def make_continuous_carrier(
         rate_mbps=rate_mbps,
     )
     bg.start()
+    try:
+        bg.ensure_running()
+    except Exception:
+        bg.stop()
+        raise
     return bg
+
+
+def _validate_resource_samples(
+    samples: list[dict[str, Any]],
+    *,
+    bmv2_pids: list[int],
+    switch_ifaces: list[str],
+    minimum_samples: int = 1,
+) -> None:
+    """Reject incomplete resource-monitor output before writing raw records."""
+    if len(samples) < minimum_samples:
+        raise RuntimeError(
+            f"resource monitor produced {len(samples)} samples; "
+            f"expected at least {minimum_samples}"
+        )
+    expected_pids = set(bmv2_pids)
+    observed_ifaces: set[str] = set()
+    timestamps: list[int] = []
+    for index, sample in enumerate(samples):
+        cpu_pids = set(sample.get("cpu_percent_per_bmv2", {}))
+        rss_pids = set(sample.get("rss_per_bmv2_bytes", {}))
+        if cpu_pids != expected_pids or rss_pids != expected_pids:
+            raise RuntimeError(
+                f"resource sample {index} process mismatch: "
+                f"cpu={sorted(cpu_pids)}, rss={sorted(rss_pids)}, "
+                f"expected={sorted(expected_pids)}"
+            )
+        observed_ifaces.update(sample.get("net_io_per_iface", {}))
+        timestamps.append(int(sample["timestamp_us"]))
+    expected_ifaces = set(switch_ifaces)
+    if observed_ifaces != expected_ifaces:
+        raise RuntimeError(
+            f"resource interface mismatch: observed={sorted(observed_ifaces)}, "
+            f"expected={sorted(expected_ifaces)}"
+        )
+    if any(later <= earlier for earlier, later in pairwise(timestamps)):
+        raise RuntimeError("resource sample timestamps are not strictly increasing")
 
 
 def _write_calibration_manifest(
@@ -301,6 +354,173 @@ def _write_calibration_manifest(
         json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def _campaign_source_paths(
+    campaign: dict[str, Any],
+    config_path: Path,
+) -> list[Path]:
+    """Return the repository inputs that define a non-calibration campaign.
+
+    The system-information snapshot records installed tool versions.  This
+    list complements it by pinning the local orchestration, topology,
+    workload, P4, dependency-declaration, and campaign-config sources used to
+    produce a run.
+    """
+    workload_sources = {
+        WORKLOAD_LATENCY_L2: (
+            "workloads/background_traffic.py",
+            "workloads/latency_probe.py",
+            "workloads/resource_monitor.py",
+        ),
+        WORKLOAD_LATENCY_L3: (
+            "workloads/background_traffic.py",
+            "workloads/latency_probe.py",
+            "workloads/resource_monitor.py",
+        ),
+        WORKLOAD_CONTROL_PLANE: (
+            "workloads/control_plane_ops.py",
+            "workloads/resource_monitor.py",
+        ),
+        WORKLOAD_RESOURCE_ONLY: (
+            "workloads/background_traffic.py",
+            "workloads/resource_monitor.py",
+        ),
+        WORKLOAD_INT_MULTIHOP: (
+            "workloads/background_traffic.py",
+            "workloads/int_collector.py",
+            "workloads/resource_monitor.py",
+        ),
+    }
+    relative_paths = {
+        "analysis/aggregate_clean.py",
+        "p4/include/instrument.p4h",
+        "pyproject.toml",
+        "runner/host_setup.py",
+        "runner/runner.py",
+        "runner/system_info.py",
+        "topologies/linear_n.py",
+        "topologies/single_switch.py",
+    }
+    for cfg in campaign["configs"]:
+        workload_type = str(cfg["workload_type"])
+        relative_paths.update(workload_sources.get(workload_type, ()))
+        program_name = str(cfg["p4_program"])
+        if program_name not in P4_PROGRAM_PATHS:
+            raise ValueError(f"unknown p4_program {program_name!r}")
+        relative_paths.add(P4_PROGRAM_PATHS[program_name])
+
+    paths = {config_path.resolve()}
+    paths.update((REPO_ROOT / relative_path).resolve() for relative_path in relative_paths)
+    missing = sorted(str(path) for path in paths if not path.is_file())
+    if missing:
+        raise FileNotFoundError(f"campaign provenance inputs not found: {missing}")
+    return sorted(paths, key=str)
+
+
+def _write_campaign_manifest(
+    *,
+    path: Path,
+    campaign: dict[str, Any],
+    config_path: Path,
+    run_id: str,
+    cells: list[tuple[dict[str, Any], int]],
+) -> None:
+    """Write the resolved schedule and source hashes for a campaign run."""
+    source_paths = _campaign_source_paths(campaign, config_path)
+    manifest = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "created_utc": _utc_now_iso(),
+        "config_path": (
+            str(config_path.resolve().relative_to(REPO_ROOT))
+            if config_path.resolve().is_relative_to(REPO_ROOT)
+            else str(config_path.resolve())
+        ),
+        "campaign": campaign,
+        "scheduled_cells": [
+            {
+                "schedule_index": index,
+                "repetition": int(repetition),
+                "config": dict(cfg),
+            }
+            for index, (cfg, repetition) in enumerate(cells)
+        ],
+        "sha256": {
+            str(file_path.relative_to(REPO_ROOT))
+            if file_path.is_relative_to(REPO_ROOT)
+            else str(file_path): _sha256_file(file_path)
+            for file_path in source_paths
+        },
+    }
+    path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _portable_artifact_path(path: Path, *, relative_to: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(relative_to.resolve()))
+    except ValueError:
+        return os.path.relpath(path.resolve(), start=relative_to.resolve())
+
+
+def _write_campaign_completion(
+    *,
+    path: Path,
+    run_id: str,
+    raw_path: Path,
+    system_info_path: Path,
+    manifest_path: Path,
+    runner_log_path: Path,
+    scheduled_cell_count: int,
+    attempted_cell_count: int,
+    failure_count: int,
+) -> int:
+    """Atomically bind completed outputs to the immutable pre-run manifest."""
+    successful_cell_count = attempted_cell_count - failure_count
+    complete = (
+        attempted_cell_count == scheduled_cell_count and failure_count == 0
+    )
+    exit_code = 0 if complete else 1
+    with raw_path.open("r", encoding="utf-8") as raw_fh:
+        record_count = sum(1 for line in raw_fh if line.strip())
+
+    def file_record(file_path: Path) -> dict[str, Any]:
+        return {
+            "path": _portable_artifact_path(
+                file_path, relative_to=path.parent
+            ),
+            "sha256": _sha256_file(file_path),
+            "size_bytes": file_path.stat().st_size,
+        }
+
+    completion = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "completed_utc": _utc_now_iso(),
+        "status": "complete" if complete else "failed",
+        "exit_code": exit_code,
+        "scheduled_cell_count": scheduled_cell_count,
+        "attempted_cell_count": attempted_cell_count,
+        "successful_cell_count": successful_cell_count,
+        "failure_count": failure_count,
+        "raw_record_count": record_count,
+        "files": {
+            "raw_jsonl": file_record(raw_path),
+            "system_info": file_record(system_info_path),
+            "measurement_manifest": file_record(manifest_path),
+            "runner_log": file_record(runner_log_path),
+        },
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(completion, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+    return exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -348,15 +568,34 @@ def main(argv: list[str] | None = None) -> int:
     has_saturation = any(
         cfg.get("workload_type") == WORKLOAD_SATURATION_SWEEP for cfg, _ in cells
     )
+    has_async_control_plane = any(
+        cfg.get("workload_type") == WORKLOAD_CONTROL_PLANE
+        and cfg.get("mode") == "async"
+        for cfg, _ in cells
+    )
 
     args.output.mkdir(parents=True, exist_ok=True)
     run_id = str(uuid.uuid4())
     jsonl_path = args.output / f"{name}_{run_id}.jsonl"
     sysinfo_path = args.output / f"system_info_{run_id}.json"
     artifacts_root = args.output / f"{name}_{run_id}_artifacts"
+    artifacts_root.mkdir(parents=True, exist_ok=False)
+    runner_log_path = artifacts_root / "runner.log"
+    file_handler = logging.FileHandler(runner_log_path, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    )
+    logging.getLogger().addHandler(file_handler)
     if has_saturation:
-        artifacts_root.mkdir(parents=True, exist_ok=False)
         _write_calibration_manifest(
+            path=artifacts_root / "manifest.json",
+            campaign=campaign,
+            config_path=args.config,
+            run_id=run_id,
+            cells=cells,
+        )
+    else:
+        _write_campaign_manifest(
             path=artifacts_root / "manifest.json",
             campaign=campaign,
             config_path=args.config,
@@ -384,11 +623,21 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     failure_count = 0
-    with open(jsonl_path, "a", encoding="utf-8") as jsonl_fh:
+    attempted_cell_count = 0
+    with ExitStack() as workload_stack:
+        async_workload_loop = (
+            workload_stack.enter_context(AsyncWorkloadLoop())
+            if has_async_control_plane
+            else None
+        )
+        jsonl_fh = workload_stack.enter_context(
+            open(jsonl_path, "a", encoding="utf-8")
+        )
         for i, (base_cfg, rep) in enumerate(cells):
+            attempted_cell_count += 1
             cfg = dict(base_cfg)
+            cfg["schedule_index"] = i
             if cfg.get("workload_type") == WORKLOAD_SATURATION_SWEEP:
-                cfg["schedule_index"] = i
                 cfg["warmup_seconds"] = int(warmup_s)
             reps = int(cfg.get("repetitions", 1))
             wl = cfg.get("workload_type")
@@ -419,7 +668,12 @@ def main(argv: list[str] | None = None) -> int:
                         len(resource_samples) * 4,
                     )
                 elif wl == WORKLOAD_CONTROL_PLANE:
-                    result, resource_samples = _run_control_plane(cfg, rep, warmup_s)
+                    result, resource_samples = _run_control_plane(
+                        cfg,
+                        rep,
+                        warmup_s,
+                        async_workload_loop=async_workload_loop,
+                    )
                     _write_control_plane_result(jsonl_fh, result, run_id, cfg, rep)
                     _write_resource_samples(jsonl_fh, resource_samples, run_id, cfg, rep)
                     logger.info(
@@ -468,8 +722,26 @@ def main(argv: list[str] | None = None) -> int:
                     logger.info("  cooldown %.1fs", cooldown_s)
                     time.sleep(cooldown_s)
 
-    logger.info("Campaign complete. JSONL: %s (failures=%d)", jsonl_path, failure_count)
-    return 1 if has_saturation and failure_count else 0
+    logging.getLogger().removeHandler(file_handler)
+    file_handler.close()
+    exit_code = _write_campaign_completion(
+        path=artifacts_root / "completion.json",
+        run_id=run_id,
+        raw_path=jsonl_path,
+        system_info_path=sysinfo_path,
+        manifest_path=artifacts_root / "manifest.json",
+        runner_log_path=runner_log_path,
+        scheduled_cell_count=len(cells),
+        attempted_cell_count=attempted_cell_count,
+        failure_count=failure_count,
+    )
+    logger.info(
+        "Campaign complete. JSONL: %s (failures=%d, completion=%s)",
+        jsonl_path,
+        failure_count,
+        artifacts_root / "completion.json",
+    )
+    return exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +757,7 @@ def _run_latency(
     from p4net import Network
 
     p4_path = _p4_path(str(cfg["p4_program"]))
+    program_name = str(cfg["p4_program"])
     n_probes = int(cfg["n_probes"])
     probe_interval_ms = float(cfg["probe_interval_ms"])
     packet_size_bytes = int(cfg["packet_size_bytes"])
@@ -563,6 +836,8 @@ def _run_latency(
                     "off (cold-idle)" if carrier is None else f"{carrier_rate} Mbps",
                 )
                 time.sleep(warmup_s)
+            if carrier is not None:
+                carrier.ensure_running()
             with ResourceMonitor(
                 sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
                 target_processes=bmv2_pids,
@@ -581,8 +856,19 @@ def _run_latency(
                     probe_interval_ms=probe_interval_ms,
                     packet_size_bytes=packet_size_bytes,
                     sequence_start=repetition * n_probes,
+                    post_instrument_bytes=P4_POST_INSTRUMENT_BYTES.get(
+                        program_name, 0
+                    ),
                 )
-            return primary, mon.samples()
+            resource_samples = mon.samples()
+            _validate_resource_samples(
+                resource_samples,
+                bmv2_pids=bmv2_pids,
+                switch_ifaces=switch_ifaces,
+            )
+            if carrier is not None:
+                carrier.ensure_running()
+            return primary, resource_samples
         finally:
             if carrier is not None:
                 carrier.stop()
@@ -794,13 +1080,30 @@ def _run_resource_only(
                     "off (cold-idle)" if carrier is None else f"{carrier_rate} Mbps",
                 )
                 time.sleep(warmup_s)
+            if carrier is not None:
+                carrier.ensure_running()
             with ResourceMonitor(
                 sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
                 target_processes=bmv2_pids,
                 target_interfaces=switch_ifaces,
             ) as mon:
                 time.sleep(duration_s)
-            return None, mon.samples()
+            resource_samples = mon.samples()
+            minimum_samples = max(
+                1,
+                math.floor(
+                    duration_s / RESOURCE_SAMPLE_INTERVAL_S * 0.9
+                ),
+            )
+            _validate_resource_samples(
+                resource_samples,
+                bmv2_pids=bmv2_pids,
+                switch_ifaces=switch_ifaces,
+                minimum_samples=minimum_samples,
+            )
+            if carrier is not None:
+                carrier.ensure_running()
+            return None, resource_samples
         finally:
             if carrier is not None:
                 carrier.stop()
@@ -913,6 +1216,8 @@ def _run_int_multihop(
                     "off (cold-idle)" if carrier is None else f"{carrier_rate} Mbps",
                 )
                 time.sleep(warmup_s)
+            if carrier is not None:
+                carrier.ensure_running()
             with ResourceMonitor(
                 sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
                 target_processes=bmv2_pids,
@@ -932,7 +1237,15 @@ def _run_int_multihop(
                     packet_size_bytes=packet_size_bytes,
                     sequence_start=repetition * n_probes,
                 )
-            return primary, mon.samples()
+            resource_samples = mon.samples()
+            _validate_resource_samples(
+                resource_samples,
+                bmv2_pids=bmv2_pids,
+                switch_ifaces=switch_ifaces,
+            )
+            if carrier is not None:
+                carrier.ensure_running()
+            return primary, resource_samples
         finally:
             if carrier is not None:
                 carrier.stop()
@@ -949,6 +1262,8 @@ def _run_control_plane(
     cfg: dict[str, Any],
     repetition: int,
     warmup_s: float,
+    *,
+    async_workload_loop: AsyncWorkloadLoop | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from p4net import Network
 
@@ -961,6 +1276,7 @@ def _run_control_plane(
     p4_path = _p4_path(str(cfg["p4_program"]))
     n_switches = int(cfg["n_switches"])
     n_entries = int(cfg["n_entries_per_switch"])
+    expected_operations = n_switches * n_entries
     operation = str(cfg["operation"])
     mode = str(cfg["mode"])
 
@@ -987,24 +1303,75 @@ def _run_control_plane(
             logger.info("  warmup %.1fs (no carrier — control-plane workload)", warmup_s)
             time.sleep(warmup_s)
 
-        with ResourceMonitor(
+        loop_context = (
+            AsyncWorkloadLoop()
+            if mode == "async" and async_workload_loop is None
+            else nullcontext(async_workload_loop)
+        )
+        with loop_context as active_async_loop, ResourceMonitor(
             sample_interval_s=RESOURCE_SAMPLE_INTERVAL_S,
             target_processes=bmv2_pids,
             target_interfaces=switch_ifaces,
         ) as mon:
             if operation == "read":
                 if mode == "sync":
-                    run_insert_sync(net, switches, table_name, n_entries, gen)
+                    prefill = run_insert_sync(
+                        net, switches, table_name, n_entries, gen
+                    )
+                    _validate_control_plane_result(
+                        prefill,
+                        expected_operations=expected_operations,
+                        phase="synchronous read prefill",
+                    )
                     primary = run_read_sync(net, switches, table_name)
                 else:
-                    run_insert_async(net, switches, table_name, n_entries, gen)
-                    primary = run_read_async(net, switches, table_name)
+                    assert active_async_loop is not None
+                    prefill = run_insert_async(
+                        net,
+                        switches,
+                        table_name,
+                        n_entries,
+                        gen,
+                        workload_loop=active_async_loop,
+                    )
+                    _validate_control_plane_result(
+                        prefill,
+                        expected_operations=expected_operations,
+                        phase="asynchronous read prefill",
+                    )
+                    primary = run_read_async(
+                        net,
+                        switches,
+                        table_name,
+                        workload_loop=active_async_loop,
+                    )
             else:
                 if mode == "sync":
-                    primary = run_insert_sync(net, switches, table_name, n_entries, gen)
+                    primary = run_insert_sync(
+                        net, switches, table_name, n_entries, gen
+                    )
                 else:
-                    primary = run_insert_async(net, switches, table_name, n_entries, gen)
-        return primary, mon.samples()
+                    assert active_async_loop is not None
+                    primary = run_insert_async(
+                        net,
+                        switches,
+                        table_name,
+                        n_entries,
+                        gen,
+                        workload_loop=active_async_loop,
+                    )
+            _validate_control_plane_result(
+                primary,
+                expected_operations=expected_operations,
+                phase=f"{mode} {operation}",
+            )
+        resource_samples = mon.samples()
+        _validate_resource_samples(
+            resource_samples,
+            bmv2_pids=bmv2_pids,
+            switch_ifaces=switch_ifaces,
+        )
+        return primary, resource_samples
     finally:
         net.stop()
 
@@ -1014,19 +1381,53 @@ def _run_control_plane(
 # ---------------------------------------------------------------------------
 
 
+def _validate_control_plane_result(
+    result: dict[str, Any], *, expected_operations: int, phase: str
+) -> None:
+    """Reject partial P4Runtime batches before they become RQ2 records."""
+    success_count = int(result.get("success_count", -1))
+    failure_count = int(result.get("failure_count", -1))
+    if failure_count != 0 or success_count != expected_operations:
+        raise RuntimeError(
+            f"{phase} batch incomplete: success={success_count}, "
+            f"failure={failure_count}, expected={expected_operations}"
+        )
+    wall_clock_s = float(result.get("total_wall_clock_s", 0.0))
+    entries_per_second = float(result.get("entries_per_second", -1.0))
+    if not math.isfinite(wall_clock_s) or wall_clock_s <= 0:
+        raise RuntimeError(f"{phase} batch has invalid wall clock {wall_clock_s}")
+    expected_rate = success_count / wall_clock_s
+    if not math.isfinite(entries_per_second) or not math.isclose(
+        entries_per_second, expected_rate, rel_tol=1e-12, abs_tol=1e-9
+    ):
+        raise RuntimeError(
+            f"{phase} batch rate {entries_per_second} does not match "
+            f"success/wall-clock {expected_rate}"
+        )
+
+
 def _latency_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
     return {
+        "workload_type": str(cfg["workload_type"]),
         "p4_program": str(cfg["p4_program"]),
+        "topology": str(cfg.get("topology", "single_switch")),
         "packet_size_bytes": int(cfg["packet_size_bytes"]),
         "background_load_mbps": int(cfg["background_load_mbps"]),
         "probe_layer": "l2" if cfg["workload_type"] == WORKLOAD_LATENCY_L2 else "l3",
         "cold_idle_reference": bool(cfg.get("cold_idle_reference", False)),
+        "n_probes": int(cfg["n_probes"]),
+        "probe_interval_ms": float(cfg["probe_interval_ms"]),
         "repetition": repetition,
+        "schedule_index": int(cfg.get("schedule_index", -1)),
+        "post_instrument_bytes": P4_POST_INSTRUMENT_BYTES.get(
+            str(cfg["p4_program"]), 0
+        ),
     }
 
 
 def _control_plane_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
     return {
+        "workload_type": str(cfg["workload_type"]),
         "p4_program": str(cfg["p4_program"]),
         "topology": str(cfg.get("topology", "linear_n")),
         "n_switches": int(cfg["n_switches"]),
@@ -1034,6 +1435,7 @@ def _control_plane_config_payload(cfg: dict[str, Any], repetition: int) -> dict[
         "operation": str(cfg["operation"]),
         "mode": str(cfg["mode"]),
         "repetition": repetition,
+        "schedule_index": int(cfg.get("schedule_index", -1)),
     }
 
 
@@ -1155,12 +1557,16 @@ def _write_control_plane_result(
 
 def _int_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
     return {
+        "workload_type": str(cfg["workload_type"]),
         "p4_program": str(cfg["p4_program"]),
         "topology": str(cfg.get("topology", "linear_n")),
         "n_switches": int(cfg["n_switches"]),
         "background_load_mbps": int(cfg.get("background_load_mbps", 0)),
         "packet_size_bytes": int(cfg["packet_size_bytes"]),
+        "n_probes": int(cfg["n_probes"]),
+        "probe_interval_ms": float(cfg["probe_interval_ms"]),
         "repetition": repetition,
+        "schedule_index": int(cfg.get("schedule_index", -1)),
     }
 
 
@@ -1199,16 +1605,35 @@ def _write_int_samples(
 
 def _resource_config_payload(cfg: dict[str, Any], repetition: int) -> dict[str, Any]:
     """Common per-sample config payload for RQ4 resource records."""
-    return {
+    payload = {
         "p4_program": str(cfg.get("p4_program", "")),
         "topology": str(cfg.get("topology", "single_switch")),
         "n_switches": int(cfg.get("n_switches", 1)),
         "background_load_mbps": int(cfg.get("background_load_mbps", 0)),
         "rate_mbps": int(cfg.get("rate_mbps", cfg.get("background_load_mbps", 0))),
         "source_workload_type": str(cfg.get("workload_type", "")),
+        "source_rq": int(cfg.get("rq", 0)),
+        "resource_sample_interval_s": RESOURCE_SAMPLE_INTERVAL_S,
         "repetition": repetition,
         "schedule_index": int(cfg.get("schedule_index", -1)),
     }
+    if "duration_s" in cfg:
+        payload["duration_s"] = float(cfg["duration_s"])
+    if "n_probes" in cfg:
+        payload["n_probes"] = int(cfg["n_probes"])
+    if "probe_interval_ms" in cfg:
+        payload["probe_interval_ms"] = float(cfg["probe_interval_ms"])
+    if "packet_size_bytes" in cfg:
+        payload["packet_size_bytes"] = int(cfg["packet_size_bytes"])
+    if "n_entries_per_switch" in cfg:
+        payload["n_entries_per_switch"] = int(cfg["n_entries_per_switch"])
+    if "operation" in cfg:
+        payload["operation"] = str(cfg["operation"])
+    if "mode" in cfg:
+        payload["mode"] = str(cfg["mode"])
+    if "cold_idle_reference" in cfg:
+        payload["cold_idle_reference"] = bool(cfg["cold_idle_reference"])
+    return payload
 
 
 def _write_resource_samples(
@@ -1290,6 +1715,8 @@ def _write_failure(
             "workload_type": cfg.get("workload_type"),
             "p4_program": cfg.get("p4_program"),
             "repetition": repetition,
+            "schedule_index": int(cfg.get("schedule_index", -1)),
+            "cell": dict(cfg),
         },
         "metric": "config_failure",
         "value": f"{type(exc).__name__}: {exc}",
