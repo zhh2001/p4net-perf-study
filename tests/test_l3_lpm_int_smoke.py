@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,8 @@ def test_iperf3_through_l3_lpm_int(tmp_path: Path) -> None:
                 stderr=server_log_fh,
             )
             try:
+                time.sleep(0.3)
+                assert server_proc.poll() is None, "iperf3 server exited before client launch"
                 # 5-second 100 Mbps UDP burst (-J = JSON summary on stdout).
                 result = h1.exec(
                     [
@@ -164,14 +167,9 @@ def test_latency_probe_through_l3_lpm_int(tmp_path: Path) -> None:
     with a positive BMv2 ingress-to-egress-start interval.
 
     The Phase G restructure keeps the outer Ethernet/IPv4 envelope
-    intact (no etherType rewrite) and appends the int_shim after the
-    instrument header. The receiver decodes the IPv4 frame normally;
-    the additional shim bytes sit between instrument and the
-    sequence + padding payload, which only affects the sequence-number
-    field's decoding — not the timestamp subtraction stored under the
-    legacy ``switch_transit_us`` key. So the JSONL ``value`` column is
-    correct; only ``extras.sequence`` is garbled, which the aggregator
-    does not use.
+    intact (no etherType rewrite) and appends the 13-byte int_shim after
+    the instrument header. The explicit program-specific offset must
+    preserve both timestamp and sequence decoding.
     """
     from p4net import Network
 
@@ -226,11 +224,13 @@ def test_latency_probe_through_l3_lpm_int(tmp_path: Path) -> None:
             n_probes=10,
             probe_interval_ms=60.0,
             packet_size_bytes=128,
+            post_instrument_bytes=13,
         )
     finally:
         net.stop()
 
     assert len(samples) == 10, f"expected 10 samples, got {len(samples)}: {samples}"
+    assert sorted(s["sequence"] for s in samples) == list(range(10))
     for s in samples:
         # The metric ends before egress-control execution, so this test
         # checks timestamp extraction and subtraction, not INT-shim cost.
