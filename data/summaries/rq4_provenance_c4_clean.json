@@ -1,0 +1,50 @@
+{
+  "across_run_summary": "median, minimum, maximum",
+  "expected_repetitions": 5,
+  "experimental_unit": "campaign run_id, configuration, repetition",
+  "files": {
+    "aggregation_script": {
+      "path": "analysis/aggregate_clean.py",
+      "sha256": "52326ea43ba7edcb9d114188030316d910acc9276ec72f780d19769541f7efff",
+      "size_bytes": 54442
+    },
+    "campaign_completion": {
+      "path": "data/raw_rep_c4/rq4_c4_clean_restarts_ae42b961-22af-40d9-99a1-1694e83275cc_artifacts/completion.json",
+      "sha256": "a4acea65cac81b6d63c513519ef04aaf9262fd18ccd2358e66b09b40a20b6fb8",
+      "size_bytes": 1099
+    },
+    "config_summary": {
+      "path": "data/summaries/rq4_summary_c4_clean.csv",
+      "sha256": "d0067d8bb29ea9efe125a9416e2584b92382d1644e969172187b70e097e02d2d",
+      "size_bytes": 13541
+    },
+    "measurement_manifest": {
+      "path": "data/raw_rep_c4/rq4_c4_clean_restarts_ae42b961-22af-40d9-99a1-1694e83275cc_artifacts/manifest.json",
+      "sha256": "dbe7b2a1c44714070c2a372dd83094bffae703cb5047eb0c093347fbbe342bb9",
+      "size_bytes": 17010
+    },
+    "raw_jsonl": {
+      "path": "data/raw_rep_c4/rq4_c4_clean_restarts_ae42b961-22af-40d9-99a1-1694e83275cc.jsonl",
+      "sha256": "173352c0e1701723261f003c778a9824d4aa5b894ccdaf98dc9d06748ab9a081",
+      "size_bytes": 70419735
+    },
+    "run_summary": {
+      "path": "data/summaries/rq4_run_summary_c4_clean.csv",
+      "sha256": "8a85bf19617c43c6e2dda9692e4cfea343b6333b32e5ad630abc6981b0c483e6",
+      "size_bytes": 33498
+    },
+    "runner_log": {
+      "path": "data/raw_rep_c4/rq4_c4_clean_restarts_ae42b961-22af-40d9-99a1-1694e83275cc_artifacts/runner.log",
+      "sha256": "49a25994f5b98b19751683cee6d8caeb2a7b03f8c9ccf2e0ade5bef1830542c2",
+      "size_bytes": 57587
+    },
+    "system_info": {
+      "path": "data/raw_rep_c4/system_info_ae42b961-22af-40d9-99a1-1694e83275cc.json",
+      "sha256": "e35b45fbbe396d9e943e233e9c78696036aeba706ee6aa1f10c955901a7899b6",
+      "size_bytes": 598
+    }
+  },
+  "rq": 4,
+  "run_id": "ae42b961-22af-40d9-99a1-1694e83275cc",
+  "schema_version": 1
+}
