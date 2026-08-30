@@ -1,0 +1,79 @@
+# Short integration-only check for every workload path used by the Concern 4
+# replacement campaigns. Outputs from this campaign are not paper data.
+
+campaign:
+  name: c4_all_workloads_smoke
+  seed: 42
+  warmup_seconds: 0
+  cooldown_seconds: 0
+  shuffle_all_cells: true
+
+configs:
+  - rq: 1
+    workload_type: latency_l2
+    p4_program: l2_forward
+    packet_size_bytes: 64
+    background_load_mbps: 0
+    n_probes: 2
+    repetitions: 1
+    probe_interval_ms: 1.0
+  - rq: 1
+    workload_type: latency_l3
+    p4_program: l3_lpm
+    packet_size_bytes: 64
+    background_load_mbps: 0
+    n_probes: 2
+    repetitions: 1
+    probe_interval_ms: 1.0
+  - rq: 2
+    workload_type: control_plane
+    p4_program: l3_lpm
+    topology: linear_n
+    n_switches: 2
+    n_entries_per_switch: 1
+    operation: read
+    mode: async
+    repetitions: 1
+  - rq: 2
+    workload_type: control_plane
+    p4_program: l3_lpm
+    topology: linear_n
+    n_switches: 1
+    n_entries_per_switch: 1
+    operation: insert
+    mode: sync
+    repetitions: 1
+  - rq: 1
+    workload_type: latency_l3
+    p4_program: l3_lpm_int
+    packet_size_bytes: 64
+    background_load_mbps: 1
+    n_probes: 2
+    repetitions: 1
+    probe_interval_ms: 1.0
+  - rq: 3
+    workload_type: int_multihop
+    p4_program: l3_lpm_int_chain
+    topology: linear_n
+    n_switches: 2
+    background_load_mbps: 0
+    n_probes: 2
+    repetitions: 1
+    probe_interval_ms: 1.0
+    packet_size_bytes: 256
+  - rq: 4
+    workload_type: resource_only
+    p4_program: l3_lpm
+    topology: single_switch
+    n_switches: 1
+    background_load_mbps: 0
+    duration_s: 0.2
+    repetitions: 1
+  - rq: 4
+    workload_type: resource_only
+    p4_program: l3_lpm
+    topology: linear_n
+    n_switches: 2
+    background_load_mbps: 1
+    duration_s: 0.2
+    repetitions: 1

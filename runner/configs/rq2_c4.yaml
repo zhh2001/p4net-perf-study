@@ -1,0 +1,61 @@
+# Reviewer 1, Concern 4: clean RQ2 run-level replication campaign.
+# All 42 configurations from rq2_full.yaml are retained. Each cell is run
+# from a fresh topology/BMv2 process five times in a randomized schedule.
+
+campaign:
+  name: rq2_c4_clean_restarts
+  seed: 42
+  warmup_seconds: 5
+  cooldown_seconds: 5
+  shuffle_all_cells: true
+
+x-control-plane: &control_plane
+  {rq: 2, workload_type: control_plane, p4_program: l3_lpm,
+   topology: linear_n, repetitions: 5}
+
+configs:
+  - {<<: *control_plane, n_switches: 1, n_entries_per_switch: 10, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 1, n_entries_per_switch: 10, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 1, n_entries_per_switch: 100, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 1, n_entries_per_switch: 100, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 1, n_entries_per_switch: 1000, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 1, n_entries_per_switch: 1000, operation: read, mode: sync}
+
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 10, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 10, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 10, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 10, operation: read, mode: async}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 100, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 100, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 100, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 100, operation: read, mode: async}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 1000, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 1000, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 1000, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 2, n_entries_per_switch: 1000, operation: read, mode: async}
+
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 10, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 10, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 10, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 10, operation: read, mode: async}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 100, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 100, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 100, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 100, operation: read, mode: async}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 1000, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 1000, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 1000, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 4, n_entries_per_switch: 1000, operation: read, mode: async}
+
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 10, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 10, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 10, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 10, operation: read, mode: async}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 100, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 100, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 100, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 100, operation: read, mode: async}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 1000, operation: insert, mode: sync}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 1000, operation: insert, mode: async}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 1000, operation: read, mode: sync}
+  - {<<: *control_plane, n_switches: 8, n_entries_per_switch: 1000, operation: read, mode: async}

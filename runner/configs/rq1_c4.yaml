@@ -1,0 +1,68 @@
+# Reviewer 1, Concern 4: clean RQ1 run-level replication campaign.
+# Each scheduled cell creates and tears down a fresh topology/BMv2 process.
+# All 37 configurations from rq1_full.yaml are retained, with five complete
+# restarts per configuration and one seed-randomized 185-cell schedule.
+
+campaign:
+  name: rq1_c4_clean_restarts
+  seed: 42
+  warmup_seconds: 30
+  cooldown_seconds: 30
+  shuffle_all_cells: true
+
+x-l2: &l2
+  {rq: 1, workload_type: latency_l2, p4_program: l2_forward,
+   n_probes: 1000, repetitions: 5, probe_interval_ms: 60.0}
+x-l3-lpm: &l3_lpm
+  {rq: 1, workload_type: latency_l3, p4_program: l3_lpm,
+   n_probes: 1000, repetitions: 5, probe_interval_ms: 60.0}
+x-l3-acl: &l3_acl
+  {rq: 1, workload_type: latency_l3, p4_program: l3_lpm_acl,
+   n_probes: 1000, repetitions: 5, probe_interval_ms: 60.0}
+x-l3-int: &l3_int
+  {rq: 1, workload_type: latency_l3, p4_program: l3_lpm_int,
+   n_probes: 1000, repetitions: 5, probe_interval_ms: 60.0}
+
+configs:
+  - {<<: *l2, packet_size_bytes: 64, background_load_mbps: 1}
+  - {<<: *l2, packet_size_bytes: 64, background_load_mbps: 25}
+  - {<<: *l2, packet_size_bytes: 64, background_load_mbps: 45}
+  - {<<: *l2, packet_size_bytes: 256, background_load_mbps: 1}
+  - {<<: *l2, packet_size_bytes: 256, background_load_mbps: 25}
+  - {<<: *l2, packet_size_bytes: 256, background_load_mbps: 45}
+  - {<<: *l2, packet_size_bytes: 1500, background_load_mbps: 1}
+  - {<<: *l2, packet_size_bytes: 1500, background_load_mbps: 25}
+  - {<<: *l2, packet_size_bytes: 1500, background_load_mbps: 45}
+
+  - {<<: *l3_lpm, packet_size_bytes: 64, background_load_mbps: 1}
+  - {<<: *l3_lpm, packet_size_bytes: 64, background_load_mbps: 25}
+  - {<<: *l3_lpm, packet_size_bytes: 64, background_load_mbps: 45}
+  - {<<: *l3_lpm, packet_size_bytes: 256, background_load_mbps: 1}
+  - {<<: *l3_lpm, packet_size_bytes: 256, background_load_mbps: 25}
+  - {<<: *l3_lpm, packet_size_bytes: 256, background_load_mbps: 45}
+  - {<<: *l3_lpm, packet_size_bytes: 1500, background_load_mbps: 1}
+  - {<<: *l3_lpm, packet_size_bytes: 1500, background_load_mbps: 25}
+  - {<<: *l3_lpm, packet_size_bytes: 1500, background_load_mbps: 45}
+
+  - {<<: *l3_acl, packet_size_bytes: 64, background_load_mbps: 1}
+  - {<<: *l3_acl, packet_size_bytes: 64, background_load_mbps: 25}
+  - {<<: *l3_acl, packet_size_bytes: 64, background_load_mbps: 45}
+  - {<<: *l3_acl, packet_size_bytes: 256, background_load_mbps: 1}
+  - {<<: *l3_acl, packet_size_bytes: 256, background_load_mbps: 25}
+  - {<<: *l3_acl, packet_size_bytes: 256, background_load_mbps: 45}
+  - {<<: *l3_acl, packet_size_bytes: 1500, background_load_mbps: 1}
+  - {<<: *l3_acl, packet_size_bytes: 1500, background_load_mbps: 25}
+  - {<<: *l3_acl, packet_size_bytes: 1500, background_load_mbps: 45}
+
+  - {<<: *l3_int, packet_size_bytes: 64, background_load_mbps: 1}
+  - {<<: *l3_int, packet_size_bytes: 64, background_load_mbps: 25}
+  - {<<: *l3_int, packet_size_bytes: 64, background_load_mbps: 45}
+  - {<<: *l3_int, packet_size_bytes: 256, background_load_mbps: 1}
+  - {<<: *l3_int, packet_size_bytes: 256, background_load_mbps: 25}
+  - {<<: *l3_int, packet_size_bytes: 256, background_load_mbps: 45}
+  - {<<: *l3_int, packet_size_bytes: 1500, background_load_mbps: 1}
+  - {<<: *l3_int, packet_size_bytes: 1500, background_load_mbps: 25}
+  - {<<: *l3_int, packet_size_bytes: 1500, background_load_mbps: 45}
+
+  - {<<: *l3_lpm, packet_size_bytes: 256, background_load_mbps: 0,
+     cold_idle_reference: true}

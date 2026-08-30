@@ -1,0 +1,23 @@
+# Reviewer 1, Concern 4: clean RQ4 run-level replication campaign.
+# All eight selected configurations from rq4_full.yaml are retained, with
+# five fresh topology/BMv2 restarts per configuration in randomized order.
+
+campaign:
+  name: rq4_c4_clean_restarts
+  seed: 42
+  warmup_seconds: 30
+  cooldown_seconds: 30
+  shuffle_all_cells: true
+
+x-resource-only: &resource_only
+  {rq: 4, workload_type: resource_only, duration_s: 60, repetitions: 5}
+
+configs:
+  - {<<: *resource_only, p4_program: l3_lpm, topology: single_switch, n_switches: 1, background_load_mbps: 1}
+  - {<<: *resource_only, p4_program: l3_lpm, topology: single_switch, n_switches: 1, background_load_mbps: 45}
+  - {<<: *resource_only, p4_program: l3_lpm, topology: linear_n, n_switches: 4, background_load_mbps: 1}
+  - {<<: *resource_only, p4_program: l3_lpm, topology: linear_n, n_switches: 4, background_load_mbps: 45}
+  - {<<: *resource_only, p4_program: l3_lpm, topology: linear_n, n_switches: 8, background_load_mbps: 1}
+  - {<<: *resource_only, p4_program: l3_lpm_int, topology: linear_n, n_switches: 4, background_load_mbps: 1}
+  - {<<: *resource_only, p4_program: l3_lpm_acl, topology: linear_n, n_switches: 4, background_load_mbps: 1}
+  - {<<: *resource_only, p4_program: l3_lpm, topology: linear_n, n_switches: 8, background_load_mbps: 45}
