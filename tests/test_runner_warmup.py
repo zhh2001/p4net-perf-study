@@ -71,6 +71,7 @@ def test_carrier_positive_rate_starts_bg_and_returns_instance() -> None:
         assert kwargs["sender_ip"] == "10.0.0.1"
         assert kwargs["receiver_ip"] == "10.0.0.2"
         instance.start.assert_called_once_with()
+        instance.ensure_running.assert_called_once_with()
         # Critically: stop is NOT called here — caller is responsible.
         instance.stop.assert_not_called()
         assert result is instance
@@ -93,4 +94,5 @@ def test_carrier_caller_owns_stop_lifecycle() -> None:
         # Simulate the workload finishing and stopping the carrier itself.
         carrier.stop()
         instance.start.assert_called_once()
+        instance.ensure_running.assert_called_once_with()
         instance.stop.assert_called_once_with()
