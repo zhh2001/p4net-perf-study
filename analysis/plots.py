@@ -453,7 +453,7 @@ def fig_rq2_scaling_curves(out_dir: Path, rq2: pd.DataFrame) -> None:
 
 
 def fig_rq3_drift_envelope(out_dir: Path, rq3: pd.DataFrame) -> None:
-    """Plot absolute run medians and within-run IQRs across five restarts."""
+    """Plot run-level medians of |d| and within-run IQRs across five restarts."""
     rows = rq3.sort_values(["n_switches", "background_load_mbps"]).copy()
     labels = [
         f"N={int(n_switches)}\n{int(load)} Mbps"
@@ -479,8 +479,8 @@ def fig_rq3_drift_envelope(out_dir: Path, rq3: pd.DataFrame) -> None:
     )
     axes[0].set_xticks(x)
     axes[0].set_xticklabels(labels)
-    axes[0].set_ylabel("Across-run median of absolute run medians (μs)")
-    axes[0].set_title("Absolute packet-drift median")
+    axes[0].set_ylabel("Across-run median of run-level median of $|d|$ (μs)")
+    axes[0].set_title("Run-level median of $|d|$")
 
     axes[1].errorbar(
         x,
