@@ -212,7 +212,7 @@ def tab_rq2_n_k_grid(out_dir: Path, rq2: pd.DataFrame) -> None:
 
 
 def tab_rq3_drift_summary(out_dir: Path, rq3: pd.DataFrame) -> None:
-    """Write signed, absolute, and within-run-IQR drift summaries."""
+    """Write signed-median, median-of-|d|, and within-run-IQR summaries."""
     source = "RQ3 clean summary"
     required = {"n_switches", "background_load_mbps", "n_reps"}
     for metric in ("median_us", "abs_median_us", "iqr_us"):
@@ -223,7 +223,8 @@ def tab_rq3_drift_summary(out_dir: Path, rq3: pd.DataFrame) -> None:
         "\\begin{tabular}{rrlll}",
         "\\toprule",
         "\\textbf{$N$} & \\textbf{Load (Mbps)} & \\textbf{Signed median ($\\mu$s)} & "
-        "\\textbf{Absolute median ($\\mu$s)} & \\textbf{Within-run IQR ($\\mu$s)} \\\\",
+        "\\textbf{Median of $\\lvert d\\rvert$ ($\\mu$s)} & "
+        "\\textbf{Within-run IQR ($\\mu$s)} \\\\",
         "\\midrule",
     ]
     for n_switches in RQ3_NS:
